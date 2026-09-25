@@ -1,0 +1,46 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# JavaScript dependencies and generated output
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+
+# Possible backend build environments; remove irrelevant rules after stack selection
+target/
+.gradle/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Runtime data, uploads, database backups and logs
+uploads/
+backups/
+pgdata/
+tmp/
+temp/
+*.dump
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+# Do not commit the distribution archive itself
+*.zip
