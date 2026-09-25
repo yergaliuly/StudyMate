@@ -1,0 +1,81 @@
+:root {
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #171d4b;
+  background: #f5f7ff;
+  font-synthesis: none;
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.setup-page {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(
+    circle at top right,
+    #ede6ff,
+    transparent 55%
+  );
+}
+
+.setup-card {
+  width: min(100%, 640px);
+  padding: clamp(24px, 6vw, 56px);
+  background: #ffffff;
+  border: 1px solid #e5e9f5;
+  border-radius: 24px;
+  box-shadow: 0 18px 60px rgba(82, 101, 246, 0.09);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 750;
+}
+
+.brand-accent {
+  color: #5265f6;
+}
+
+.setup-badge {
+  display: inline-block;
+  margin: 32px 0 16px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: #414fc4;
+  background: #e9edff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.setup-card h1 {
+  margin: 0;
+  font-size: clamp(28px, 5vw, 40px);
+  line-height: 1.2;
+  letter-spacing: -0.8px;
+}
+
+.setup-description {
+  margin: 20px 0 0;
+  color: #626b8a;
+  font-size: 17px;
+}
+
+.setup-note {
+  margin: 28px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid #e5e9f5;
+  color: #626b8a;
+  font-size: 14px;
+}
