@@ -38,6 +38,8 @@ export default function DashboardPage({
   searchQuery,
   onOpenSubject,
   onAddSubject,
+  onEditSubject,
+  onDeleteSubject,
   subjectsOnly = false,
 }) {
   const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -166,14 +168,26 @@ export default function DashboardPage({
                 key={subject.id}
                 subject={subject}
                 onOpen={onOpenSubject}
+                onEdit={onEditSubject}
+                onDelete={onDeleteSubject}
               />
             ))}
           </div>
         ) : (
           <div className="panel empty-state" role="status">
             <BookOpen size={30} aria-hidden="true" />
-            <h3>Предметы не найдены</h3>
-            <p>Попробуй другое название или очисти строку поиска.</p>
+
+            <h3>
+              {subjects.length === 0
+                ? 'Пока нет предметов'
+                : 'Предметы не найдены'}
+            </h3>
+
+            <p>
+              {subjects.length === 0
+                ? 'Нажми «Добавить предмет», чтобы создать первый предмет.'
+                : 'Попробуй другое название или очисти строку поиска.'}
+            </p>
           </div>
         )}
       </section>

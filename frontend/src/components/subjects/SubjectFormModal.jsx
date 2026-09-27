@@ -8,18 +8,23 @@ const colorOptions = [
   { value: 'green', label: 'Зелёный' },
 ];
 
-export default function CreateSubjectModal({ onClose, onCreate }) {
+export default function SubjectFormModal({
+  initialSubject = null,
+  onClose,
+  onSave,
+}) {
+  const isEditing = initialSubject !== null;
   const dialogRef = useRef(null);
   const titleRef = useRef(null);
 
   const [error, setError] = useState('');
 
-  const [form, setForm] = useState({
-    title: '',
-    description: '',
-    icon: 'book',
-    tone: 'blue',
-  });
+  const [form, setForm] = useState(() => ({
+    title: initialSubject?.title ?? '',
+    description: initialSubject?.description ?? '',
+    icon: initialSubject?.icon ?? 'book',
+    tone: initialSubject?.tone ?? 'blue',
+}));
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -49,7 +54,7 @@ export default function CreateSubjectModal({ onClose, onCreate }) {
   function handleSubmit(event) {
     event.preventDefault();
 
-    const message = onCreate(form);
+    const message = onSave(form);
 
     if (message) {
       setError(message);
@@ -105,10 +110,14 @@ export default function CreateSubjectModal({ onClose, onCreate }) {
         </button>
       </div>
 
-      <h2 id="create-subject-title">Новый предмет</h2>
+      <h2 id="create-subject-title">
+        {isEditing ? 'Редактировать предмет' : 'Новый предмет'}
+      </h2>
 
       <p id="create-subject-description" className="muted">
-        Добавь предмет и выбери оформление его карточки.
+        {isEditing
+          ? 'Измени информацию и оформление карточки.'
+          : 'Добавь предмет и выбери оформление его карточки.'}
       </p>
 
       <form className="subject-form" onSubmit={handleSubmit} noValidate>
@@ -211,7 +220,7 @@ export default function CreateSubjectModal({ onClose, onCreate }) {
           </button>
 
           <button type="submit" className="primary-button">
-            Создать предмет
+            {isEditing ? 'Сохранить изменения' : 'Создать предмет'}
           </button>
         </div>
       </form>

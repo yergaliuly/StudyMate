@@ -1094,3 +1094,125 @@ svg {
     align-items: stretch;
   }
 }
+
+/* Действия с карточкой предмета */
+
+.subject-card {
+  position: relative;
+}
+
+.subject-card--menu-open {
+  z-index: 4;
+}
+
+.subject-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subject-actions {
+  position: relative;
+}
+
+.subject-menu-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+
+.subject-actions-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  display: grid;
+  gap: 4px;
+  width: 186px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: #ffffff;
+  box-shadow: 0 12px 35px rgba(40, 52, 112, 0.15);
+}
+
+.subject-actions-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #515c80;
+  font-size: 13px;
+  text-align: left;
+}
+
+.subject-actions-menu button:hover {
+  background: #f1f3ff;
+  color: var(--primary);
+}
+
+.subject-actions-menu .subject-action-danger {
+  color: #b03b56;
+}
+
+.subject-actions-menu .subject-action-danger:hover {
+  background: #fff0f4;
+  color: #a12d49;
+}
+
+/* Подтверждение удаления */
+
+.delete-subject-modal {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.danger-icon {
+  background: #fff0f4;
+  color: #b83c58;
+}
+
+.delete-subject-description {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.delete-subject-description strong {
+  color: var(--text);
+}
+
+.delete-subject-modal .subject-form-note {
+  margin-top: 16px;
+}
+
+.delete-subject-modal .form-error {
+  margin-top: 16px;
+}
+
+.delete-subject-modal .subject-form-actions {
+  margin-top: 24px;
+}
+
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 11px;
+  background: #b83c58;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.danger-button:hover {
+  background: #a22f49;
+}

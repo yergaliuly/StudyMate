@@ -1,13 +1,16 @@
 import { demoSubjects } from '../mocks/dashboard.js';
 
 const STORAGE_KEY = 'studymate.demo.subjects.v1';
+
 const icons = ['book', 'database', 'languages', 'code'];
 const tones = ['blue', 'purple', 'indigo', 'green'];
 
+// Убираем пробелы по краям и повторяющиеся пробелы внутри названия.
 function normalizeTitle(title) {
   return title.trim().replace(/\s+/g, ' ');
 }
 
+// Проверяем структуру предмета, прочитанного из хранилища.
 function isValidSubject(subject) {
   return (
     subject !== null &&
@@ -29,12 +32,16 @@ function isValidSubject(subject) {
   );
 }
 
+// Загружаем предметы из локального хранилища.
 export function loadSubjects() {
   const fallback = demoSubjects.map((subject) => ({ ...subject }));
 
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    const subjects = raw === null ? fallback : JSON.parse(raw);
+
+    const subjects = raw === null
+      ? fallback
+      : JSON.parse(raw);
 
     if (
       !Array.isArray(subjects) ||
@@ -44,7 +51,11 @@ export function loadSubjects() {
       throw new Error('Некорректный формат сохранённых предметов.');
     }
 
-    return { subjects, canPersist: true, warning: '' };
+    return {
+      subjects,
+      canPersist: true,
+      warning: '',
+    };
   } catch {
     // Не перезаписываем данные, которые не удалось прочитать.
     return {
@@ -56,16 +67,23 @@ export function loadSubjects() {
   }
 }
 
+// Сохраняем весь список предметов.
+// Пустая строка означает, что сохранение прошло без ошибки.
 export function saveSubjects(subjects) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(subjects));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(subjects),
+    );
+
     return '';
   } catch {
     return 'Не удалось сохранить изменения в браузере. Пока они доступны только на открытой странице.';
   }
 }
 
-export function createSubject(values, existingSubjects) {
+// Общая проверка формы при создании и редактировании.
+function validateSubjectForm(values, existingSubjects, ignoredId = null) {
   const title = normalizeTitle(values.title);
   const description = values.description.trim();
 
@@ -79,6 +97,7 @@ export function createSubject(values, existingSubjects) {
 
   const duplicate = existingSubjects.some(
     (subject) =>
+      subject.id !== ignoredId &&
       normalizeTitle(subject.title).toLowerCase() === title.toLowerCase(),
   );
 
@@ -91,12 +110,59 @@ export function createSubject(values, existingSubjects) {
   }
 
   return {
-    id: crypto.randomUUID(),
     title,
     description,
     icon: values.icon,
     tone: values.tone,
+  };
+}
+
+// Создаём новый предмет.
+export function createSubject(values, existingSubjects) {
+  const fields = validateSubjectForm(values, existingSubjects);
+
+  return {
+    id: crypto.randomUUID(),
+    ...fields,
     lectures: 0,
     progress: 0,
   };
+}
+
+// Изменяем существующий предмет.
+export function updateSubject(subjectId, values, existingSubjects) {
+  const currentSubject = existingSubjects.find(
+    (subject) => subject.id === subjectId,
+  );
+
+  if (!currentSubject) {
+    throw new Error('Предмет не найден.');
+  }
+
+  const fields = validateSubjectForm(
+    values,
+    existingSubjects,
+    subjectId,
+  );
+
+  // Сохраняем ID, количество лекций и прогресс.
+  return {
+    ...currentSubject,
+    ...fields,
+  };
+}
+
+// Возвращаем список без удалённого предмета.
+export function removeSubject(subjectId, existingSubjects) {
+  const exists = existingSubjects.some(
+    (subject) => subject.id === subjectId,
+  );
+
+  if (!exists) {
+    throw new Error('Предмет не найден.');
+  }
+
+  return existingSubjects.filter(
+    (subject) => subject.id !== subjectId,
+  );
 }
