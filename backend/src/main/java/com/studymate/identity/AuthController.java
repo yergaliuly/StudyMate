@@ -1,14 +1,10 @@
 package com.studymate.identity;
 
-import com.studymate.common.api.ApiException;
 import com.studymate.common.api.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.time.Clock;
-import java.util.Map;
-import java.util.UUID;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -28,15 +24,15 @@ class AuthController {
   private final AuthenticationManager authenticationManager;
   private final SessionAuthenticationStrategy sessions;
   private final SecurityContextRepository contexts;
-  private final UserRepository users;
+  private final CurrentAccount accounts;
   private final Clock clock;
 
   AuthController(AuthenticationManager authenticationManager, SessionAuthenticationStrategy sessions,
-      SecurityContextRepository contexts, UserRepository users, Clock clock) {
+      SecurityContextRepository contexts, CurrentAccount accounts, Clock clock) {
     this.authenticationManager = authenticationManager;
     this.sessions = sessions;
     this.contexts = contexts;
-    this.users = users;
+    this.accounts = accounts;
     this.clock = clock;
   }
 
@@ -60,7 +56,7 @@ class AuthController {
     } finally {
       input.eraseCredentials();
     }
-    var user = currentUser(authentication, request);
+    var user = accounts.requireUser(authentication, request);
     sessions.onAuthentication(authentication, request, response);
     request.getSession().setAttribute(SessionLifetimeFilter.AUTHENTICATED_AT, clock.millis());
     var context = SecurityContextHolder.createEmptyContext();
@@ -73,16 +69,6 @@ class AuthController {
   @GetMapping("/api/v1/auth/me")
   ResponseEntity<ApiResponse<UserResponse>> me(Authentication authentication, HttpServletRequest request) {
     return ResponseEntity.ok().header("Cache-Control", "no-store")
-        .body(new ApiResponse<>(currentUser(authentication, request)));
-  }
-
-  private UserResponse currentUser(Authentication authentication, HttpServletRequest request) {
-    return users.findById(UUID.fromString(authentication.getName())).map(UserResponse::from)
-        .orElseThrow(() -> {
-          SecurityContextHolder.clearContext();
-          var session = request.getSession(false);
-          if (session != null) session.invalidate();
-          return new ApiException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED", "Войди в аккаунт.", Map.of());
-        });
+        .body(new ApiResponse<>(accounts.requireUser(authentication, request)));
   }
 }

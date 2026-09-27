@@ -51,6 +51,8 @@ class BootstrapIT extends PostgresIntegrationTest {
     assertThat(jdbc.queryForObject("SHOW TIME ZONE", String.class)).isEqualTo("UTC");
     assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '3'",
         Integer.class)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '4'",
+        Integer.class)).isEqualTo(1);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class)
