@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import LectureCard from '../components/lectures/LectureCard.jsx';
+import PdfUploadModal from '../components/lectures/PdfUploadModal.jsx';
 
 const subjectIcons = {
   book: BookOpen,
@@ -29,17 +30,29 @@ export default function SubjectPage({
   onBack,
   onEdit,
   onDelete,
+  onAddLecture,
 }) {
   const [lectureQuery, setLectureQuery] = useState('');
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
 
   const Icon = subjectIcons[subject.icon] ?? BookOpen;
   const normalizedQuery = lectureQuery.trim().toLowerCase();
 
   const filteredLectures = lectures.filter((lecture) => {
     const text = `${lecture.title} ${lecture.description}`.toLowerCase();
-
     return text.includes(normalizedQuery);
   });
+
+  function handleAddLecture(values) {
+    const error = onAddLecture(values);
+
+    if (!error) {
+      // Новая карточка должна быть видна даже при прежнем фильтре.
+      setLectureQuery('');
+    }
+
+    return error;
+  }
 
   return (
     <div className="subject-page">
@@ -101,9 +114,9 @@ export default function SubjectPage({
           <Info size={19} aria-hidden="true" />
 
           <p>
-            {lectures.length > 0
-              ? 'Ниже показаны примеры лекций для проверки интерфейса. Это не загруженные файлы.'
-              : 'Здесь будут материалы твоего предмета. Загрузка файлов и ИИ пока не подключены.'}
+            Выбранные PDF доступны до перезагрузки приложения.
+            Они не отправлены на сервер. Карточки с пометкой
+            «Пример» остаются демонстрационными.
           </p>
         </div>
       </section>
@@ -116,29 +129,19 @@ export default function SubjectPage({
             </h2>
 
             <p className="muted">
-              {lectures.length > 0
-                ? 'Демонстрационный список лекций'
-                : 'Все материалы предмета будут в одном месте'}
+              Выбирай PDF и проверяй материалы перед отправкой
             </p>
           </div>
 
           <button
             type="button"
             className="primary-button"
-            aria-describedby="subject-upload-hint"
-            disabled
+            onClick={() => setIsUploadOpen(true)}
           >
             <Upload size={18} aria-hidden="true" />
-            Загрузить PDF
+            Добавить PDF
           </button>
         </div>
-
-        <p
-          id="subject-upload-hint"
-          className="subject-upload-hint"
-        >
-          Загрузку PDF реализуем отдельным следующим этапом.
-        </p>
 
         {lectures.length > 0 && (
           <div className="materials-toolbar">
@@ -174,8 +177,8 @@ export default function SubjectPage({
             <h3>Пока нет лекций</h3>
 
             <p>
-              Предмет уже создан. Здесь появятся его лекции,
-              когда подключим добавление материалов.
+              Нажми «Добавить PDF», чтобы выбрать первый материал
+              для этого предмета.
             </p>
           </div>
         ) : filteredLectures.length > 0 ? (
@@ -193,9 +196,7 @@ export default function SubjectPage({
 
             <h3>Лекции не найдены</h3>
 
-            <p>
-              Попробуй другое название или очисти поиск.
-            </p>
+            <p>Попробуй другое название или очисти поиск.</p>
 
             <button
               type="button"
@@ -207,6 +208,13 @@ export default function SubjectPage({
           </div>
         )}
       </section>
+
+      {isUploadOpen && (
+        <PdfUploadModal
+          onClose={() => setIsUploadOpen(false)}
+          onAdd={handleAddLecture}
+        />
+      )}
     </div>
   );
 }

@@ -1479,3 +1479,103 @@ svg {
     padding: 20px;
   }
 }
+
+/* Выбор и перетаскивание PDF */
+
+.pdf-upload-modal {
+  width: min(570px, calc(100vw - 32px));
+}
+
+.pdf-dropzone {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 28px 18px;
+  border: 2px dashed #cbd2f6;
+  border-radius: 17px;
+  background: linear-gradient(135deg, #f5f7ff, #f8f3ff);
+  color: #7266d2;
+  text-align: center;
+}
+
+.pdf-dropzone strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.pdf-dropzone p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pdf-dropzone--active {
+  border-color: #7763ed;
+  background: #eeebff;
+  box-shadow: 0 0 0 4px rgba(119, 99, 237, 0.09);
+}
+
+.pdf-dropzone .secondary-button {
+  margin-top: 4px;
+}
+
+/* Информация о выбранном файле */
+
+.pdf-selected-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #dce5fa;
+  border-radius: 12px;
+  background: #f3f7ff;
+  color: #5d74d8;
+}
+
+.pdf-selected-file > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pdf-selected-file strong {
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pdf-selected-file span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pdf-local-warning {
+  padding: 12px 14px;
+  border: 1px solid #e7ddfa;
+  border-radius: 12px;
+  background: #f7f3ff;
+  color: #74638f;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* Карточка локального PDF */
+
+.local-file-badge {
+  background: #fff4df;
+  color: #8a6221;
+}
+
+.lecture-card a.secondary-button {
+  gap: 8px;
+  text-decoration: none;
+}
+
+@media (max-width: 480px) {
+  .pdf-dropzone {
+    padding: 24px 14px;
+  }
+
+  .pdf-dropzone strong {
+    font-size: 15px;
+  }
+}

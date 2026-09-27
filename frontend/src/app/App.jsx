@@ -11,6 +11,7 @@ import DeleteSubjectModal from '../components/subjects/DeleteSubjectModal.jsx';
 import { demoUser } from '../mocks/dashboard.js';
 import SubjectPage from '../pages/SubjectPage.jsx';
 import { demoLectures } from '../mocks/lectures.js';
+import { createLocalLecture } from '../services/pdfFiles.js';
 
 import {
   loadSubjects,
@@ -57,6 +58,46 @@ export default function App() {
   const [initialData] = useState(loadSubjects);
 
   const [subjects, setSubjects] = useState(initialData.subjects);
+  const [localLectures, setLocalLectures] = useState([]);
+
+// Временные файлы и демонстрационные карточки.
+// Этот массив не записываем в localStorage.
+const allLectures = [...localLectures, ...demoLectures];
+
+// Теперь число лекций на карточке соответствует списку,
+// который показываем внутри предмета.
+const subjectsForView = subjects.map((subject) => ({
+  ...subject,
+  lectures: allLectures.filter(
+    (lecture) => lecture.subjectId === subject.id,
+  ).length,
+}));
+
+function handleAddLocalLecture(subjectId, values) {
+  try {
+    const subjectExists = subjects.some(
+      (subject) => subject.id === subjectId,
+    );
+
+    if (!subjectExists) {
+      return 'Предмет больше не существует.';
+    }
+
+    const lecture = createLocalLecture(
+      subjectId,
+      values,
+      localLectures,
+    );
+
+    setLocalLectures((current) => [lecture, ...current]);
+
+    return '';
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Не удалось добавить PDF.';
+  }
+}
   const [storageWarning, setStorageWarning] = useState(initialData.warning);
 
   const [activePage, setActivePage] = useState('dashboard');
@@ -149,6 +190,12 @@ export default function App() {
 
       applySubjects(updatedSubjects);
 
+      // Убираем временные записи удалённого предмета.
+      // Исходные файлы на компьютере не удаляются.
+      setLocalLectures((current) =>
+        current.filter((lecture) => lecture.subjectId !== subjectId),
+      );
+
       if (selectedSubjectId === subjectId) {
         setSelectedSubjectId(null);
       }
@@ -202,29 +249,32 @@ export default function App() {
           )}
 
           {selectedSubject ? (
-            <SubjectPage
-              key={selectedSubject.id}
-              subject={selectedSubject}
-              lectures={demoLectures.filter(
-                (lecture) => lecture.subjectId === selectedSubject.id,
-              )}
-              onBack={() => handleNavigate('subjects')}
-              onEdit={() =>
-                setSubjectDialog({
-                  type: 'edit',
-                  subjectId: selectedSubject.id,
-                })
-              }
-              onDelete={() =>
-                setSubjectDialog({
-                  type: 'delete',
-                  subjectId: selectedSubject.id,
-                })
-              }
-            />
+          <SubjectPage
+            key={selectedSubject.id}
+            subject={selectedSubject}
+            lectures={allLectures.filter(
+              (lecture) => lecture.subjectId === selectedSubject.id,
+            )}
+            onBack={() => handleNavigate('subjects')}
+            onEdit={() =>
+              setSubjectDialog({
+                type: 'edit',
+                subjectId: selectedSubject.id,
+              })
+            }
+            onDelete={() =>
+              setSubjectDialog({
+                type: 'delete',
+                subjectId: selectedSubject.id,
+              })
+            }
+            onAddLecture={(values) =>
+              handleAddLocalLecture(selectedSubject.id, values)
+            }
+          />
           ) : showDashboard ? (
             <DashboardPage
-              subjects={subjects}
+              subjects={subjectsForView}
               searchQuery={searchQuery}
               onOpenSubject={handleOpenSubject}
               onAddSubject={() =>
