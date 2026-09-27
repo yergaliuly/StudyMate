@@ -69,6 +69,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         HttpStatus.SERVICE_UNAVAILABLE, request);
   }
 
+  @ExceptionHandler(ApiException.class)
+  ResponseEntity<Object> applicationError(ApiException exception, WebRequest request) {
+    return handleExceptionInternal(exception, exception.response(), new HttpHeaders(),
+        exception.status(), request);
+  }
+
   @ExceptionHandler(Exception.class)
   ResponseEntity<Object> unexpected(Exception exception, WebRequest request) {
     // Do not log request bodies, exception messages or SQL containing private data.

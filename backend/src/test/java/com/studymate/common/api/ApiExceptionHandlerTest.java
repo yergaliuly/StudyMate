@@ -59,7 +59,7 @@ class ApiExceptionHandlerTest {
       "{\"title\":\"Valid\",\"ownerId\":\"untrusted\"}",
       "{\"title\":{\"private\":\"value\"}}", "{\"title\":123}",
       "{\"title\":1.5}", "{\"title\":true}",
-      "{\"title\":null}", "{}", "[]"
+      "{\"title\":null}", "{}", "[]", "null"
   })
   void invalidFieldsAndTypesReturn422(String body) throws Exception {
     mvc.perform(post("/probe").contentType(MediaType.APPLICATION_JSON).content(body))

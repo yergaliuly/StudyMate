@@ -21,10 +21,11 @@ import tools.jackson.databind.json.JsonMapper;
 public class BootstrapSecurityConfiguration {
   @Bean
   SecurityFilterChain securityFilterChain(HttpSecurity http, JsonMapper mapper) throws Exception {
-    // Stage 2 has no accounts: expose only the operational health check.
+    // Registration remains CSRF-protected; the token endpoint is added in stage 4.
     http.authorizeHttpRequests(authorize -> authorize
             .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
             .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+            .requestMatchers(HttpMethod.POST, "/api/v1/auth/register").permitAll()
             .anyRequest().denyAll())
         .csrf(Customizer.withDefaults())
         .formLogin(AbstractHttpConfigurer::disable)

@@ -2,6 +2,10 @@ package com.studymate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,35 +18,25 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.json.JsonMapper;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class BootstrapIT {
-  @DynamicPropertySource
-  static void database(DynamicPropertyRegistry registry) {
-    registry.add("spring.datasource.url", () -> required("STUDYMATE_TEST_DATABASE_URL"));
-    registry.add("spring.datasource.username", () -> required("STUDYMATE_TEST_DATABASE_USERNAME"));
-    registry.add("spring.datasource.password", () -> required("STUDYMATE_TEST_DATABASE_PASSWORD"));
-  }
-
-  private static String required(String name) {
-    String value = System.getenv(name);
-    if (value == null || value.isBlank()) {
-      throw new IllegalStateException("Set " + name + " to a dedicated PostgreSQL test database");
-    }
-    return value;
-  }
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    properties = "studymate.registration.enabled=false")
+@AutoConfigureMockMvc
+class BootstrapIT extends PostgresIntegrationTest {
 
   @Value("${local.server.port}") int port;
   @Autowired JdbcTemplate jdbc;
   @Autowired Flyway flyway;
   @Autowired JsonMapper mapper;
   @Autowired ApplicationContext context;
+  @Autowired MockMvc mvc;
 
   @Test
   void migrationsCreateSchemaAndAreSafeToRepeat() {
@@ -51,6 +45,8 @@ class BootstrapIT {
     assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'studymate'",
         Integer.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '1'",
+        Integer.class)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '2'",
         Integer.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SHOW TIME ZONE", String.class)).isEqualTo("UTC");
     flyway.validate();
@@ -69,7 +65,7 @@ class BootstrapIT {
 
   @Test
   void applicationAndManagementRoutesAreClosedWithoutHtmlLogin() throws Exception {
-    for (String path : new String[]{"/api/v1/auth/me", "/api/v1/subjects", "/actuator/env", "/login"}) {
+    for (String path : new String[]{"/api/v1/auth/csrf", "/api/v1/auth/me", "/api/v1/subjects", "/actuator/env", "/login"}) {
       var response = request("GET", path);
       assertThat(response.statusCode()).isEqualTo(401);
       assertThat(mapper.readTree(response.body()).at("/error/code").asString())
@@ -86,6 +82,21 @@ class BootstrapIT {
     assertThat(response.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(response.body()).at("/error/code").asString()).isEqualTo("CSRF_INVALID");
     assertThat(mapper.readTree(response.body()).at("/error/fieldErrors").isEmpty()).isTrue();
+    var registration = request("POST", "/api/v1/auth/register");
+    assertThat(registration.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(registration.body()).at("/error/code").asString()).isEqualTo("CSRF_INVALID");
+  }
+
+  @Test
+  void disabledRegistrationRejectsEvenValidCsrf() throws Exception {
+    long countBefore = jdbc.queryForObject("SELECT count(*) FROM studymate.users", Long.class);
+    mvc.perform(post("/api/v1/auth/register").with(csrf().asHeader())
+            .contentType(MediaType.APPLICATION_JSON).content("""
+                {"email":"closed@example.com","password":"Example-only password!","displayName":"Test"}
+                """))
+        .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("REGISTRATION_CLOSED"))
+        .andExpect(jsonPath("$.error.fieldErrors").isEmpty());
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM studymate.users", Long.class)).isEqualTo(countBefore);
   }
 
   private HttpResponse<String> request(String method, String path) throws Exception {
