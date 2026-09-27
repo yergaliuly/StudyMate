@@ -9,6 +9,8 @@ import SubjectFormModal from '../components/subjects/SubjectFormModal.jsx';
 import DeleteSubjectModal from '../components/subjects/DeleteSubjectModal.jsx';
 
 import { demoUser } from '../mocks/dashboard.js';
+import SubjectPage from '../pages/SubjectPage.jsx';
+import { demoLectures } from '../mocks/lectures.js';
 
 import {
   loadSubjects,
@@ -200,10 +202,25 @@ export default function App() {
           )}
 
           {selectedSubject ? (
-            <PlaceholderPage
-              title={selectedSubject.title}
-              description="Здесь будут лекции, конспекты и тесты по предмету. Страницу предмета реализуем следующим этапом."
-              onBack={() => handleNavigate('dashboard')}
+            <SubjectPage
+              key={selectedSubject.id}
+              subject={selectedSubject}
+              lectures={demoLectures.filter(
+                (lecture) => lecture.subjectId === selectedSubject.id,
+              )}
+              onBack={() => handleNavigate('subjects')}
+              onEdit={() =>
+                setSubjectDialog({
+                  type: 'edit',
+                  subjectId: selectedSubject.id,
+                })
+              }
+              onDelete={() =>
+                setSubjectDialog({
+                  type: 'delete',
+                  subjectId: selectedSubject.id,
+                })
+              }
             />
           ) : showDashboard ? (
             <DashboardPage
