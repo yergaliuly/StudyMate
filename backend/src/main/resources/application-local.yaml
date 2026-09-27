@@ -1,0 +1,6 @@
+# Explicit exception for development over HTTP on loopback, never for a deployed server.
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false

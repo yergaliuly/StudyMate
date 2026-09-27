@@ -49,6 +49,8 @@ class BootstrapIT extends PostgresIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '2'",
         Integer.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SHOW TIME ZONE", String.class)).isEqualTo("UTC");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '3'",
+        Integer.class)).isEqualTo(1);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class)
@@ -65,7 +67,7 @@ class BootstrapIT extends PostgresIntegrationTest {
 
   @Test
   void applicationAndManagementRoutesAreClosedWithoutHtmlLogin() throws Exception {
-    for (String path : new String[]{"/api/v1/auth/csrf", "/api/v1/auth/me", "/api/v1/subjects", "/actuator/env", "/login"}) {
+    for (String path : new String[]{"/api/v1/auth/me", "/api/v1/subjects", "/actuator/env", "/login"}) {
       var response = request("GET", path);
       assertThat(response.statusCode()).isEqualTo(401);
       assertThat(mapper.readTree(response.body()).at("/error/code").asString())
@@ -74,6 +76,17 @@ class BootstrapIT extends PostgresIntegrationTest {
       assertThat(response.headers().firstValue("Location")).isEmpty();
       assertThat(response.headers().firstValue("WWW-Authenticate")).isEmpty();
     }
+  }
+
+  @Test
+  void defaultProfileRequiresSecureHttpOnlyHostCookie() throws Exception {
+    var response = request("GET", "/api/v1/auth/csrf");
+    assertThat(response.statusCode()).isEqualTo(200);
+    String cookie = response.headers().firstValue("Set-Cookie").orElseThrow();
+    assertThat(cookie.startsWith("STUDYMATE_SESSION=")).isTrue();
+    assertThat(cookie.contains("Secure") && cookie.contains("HttpOnly")
+        && cookie.contains("SameSite=Lax") && cookie.contains("Path=/")).isTrue();
+    assertThat(cookie.contains("Domain=")).isFalse();
   }
 
   @Test

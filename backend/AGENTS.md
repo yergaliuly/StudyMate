@@ -13,9 +13,11 @@
   [API](../docs/api.md), [ответственность](../docs/team-tasks.md).
   Frontend подтвердил общую архитектуру, формат ответов и первые API аккаунта/предметов.
   До интеграции уточнить материалы и PATCH; удаление истории попыток повторно обсудить.
-  Этап 3: реализована регистрация, но /auth/csrf, login/logout/me и сессии — этап 4.
+  Этапы 3–4: реализованы регистрация, /auth/csrf, login/logout/me и сессии JDBC.
   Регистрация закрыта по умолчанию (STUDYMATE_REGISTRATION_ENABLED=false).
-  Полный браузерный сценарий ещё не готов; не отключай CSRF для его имитации.
+  API проверен реальным HTTP и перезапуском JAR. Проверку UI с другом проводить отдельно.
+  Cookie STUDYMATE_SESSION: HttpOnly, SameSite=Lax, Secure по умолчанию; HTTP — профиль local.
+  Сессия: 30 минут бездействия, 12 часов после входа; principal — UUID, без пароля/хеша.
 - API: /api/v1, camelCase, data/meta/error, UUID сервера, ISO 8601 UTC.
   SQL-поля — snake_case. Изменения контракта обсуждай; не копируй формат localStorage.
   title/description/icon/tone сохраняются; lectureCount вычисляется, progressPercent пока null.
