@@ -7,10 +7,7 @@ import {
   Info,
 } from 'lucide-react';
 import SubjectCard from '../components/ui/SubjectCard.jsx';
-import {
-  demoProgress,
-  demoSubjects,
-} from '../mocks/dashboard.js';
+import { demoProgress } from '../mocks/dashboard.js';
 
 const statistics = [
   {
@@ -37,13 +34,15 @@ const statistics = [
 ];
 
 export default function DashboardPage({
+  subjects,
   searchQuery,
   onOpenSubject,
+  onAddSubject,
   subjectsOnly = false,
 }) {
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
-  const filteredSubjects = demoSubjects.filter((subject) => {
+  const filteredSubjects = subjects.filter((subject) => {
     const searchableText =
       `${subject.title} ${subject.description}`.toLowerCase();
 
@@ -153,8 +152,7 @@ export default function DashboardPage({
           <button
             type="button"
             className="primary-button"
-            title="Создание предметов добавим на следующем этапе"
-            disabled
+            onClick={onAddSubject}
           >
             <Plus size={18} aria-hidden="true" />
             Добавить предмет
@@ -184,8 +182,9 @@ export default function DashboardPage({
         <Info size={19} aria-hidden="true" />
 
         <p>
-          Сейчас показаны демонстрационные данные. Создание предметов,
-          загрузку лекций и настоящий прогресс подключим позже.
+          Исходные предметы и статистика показаны для примера.
+          Новые предметы сохраняются локально в этом браузере.
+          Сервер, загрузка лекций и настоящий прогресс пока не подключены.
         </p>
       </div>
     </div>

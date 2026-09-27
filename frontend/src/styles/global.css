@@ -887,3 +887,210 @@ svg {
     transition: none !important;
   }
 }
+
+/* Окно создания предмета */
+.subject-modal {
+  width: min(540px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 28px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: #ffffff;
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(38, 48, 106, 0.2);
+}
+
+.subject-modal::backdrop {
+  background: rgba(24, 30, 64, 0.35);
+  backdrop-filter: blur(4px);
+}
+
+.subject-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.subject-modal h2 {
+  font-size: 25px;
+  line-height: 1.3;
+  letter-spacing: -0.6px;
+}
+
+.subject-form {
+  display: grid;
+  gap: 19px;
+  margin-top: 24px;
+}
+
+.subject-field {
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subject-field small {
+  margin-left: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.subject-field input,
+.subject-field textarea,
+.subject-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #dfe4f4;
+  border-radius: 11px;
+  background: #fafbff;
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+}
+
+.subject-field textarea {
+  min-height: 94px;
+  resize: vertical;
+}
+
+.subject-field input::placeholder,
+.subject-field textarea::placeholder {
+  color: #7a84a4;
+}
+
+.subject-field input:focus-visible,
+.subject-field textarea:focus-visible,
+.subject-field select:focus-visible {
+  outline: 3px solid #d8d8ff;
+  outline-offset: 2px;
+  border-color: #8276ef;
+}
+
+.subject-field .field-hint {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-align: right;
+}
+
+.subject-colors {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.subject-colors legend {
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subject-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.subject-color-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--tone-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.subject-color-option input {
+  margin: 0;
+  accent-color: var(--tone);
+}
+
+.subject-color-dot {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
+.subject-form-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.subject-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid #e0e5f5;
+  border-radius: 11px;
+  background: #ffffff;
+  color: #5d6685;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.secondary-button:hover {
+  background: #f3f5ff;
+}
+
+.form-error {
+  padding: 11px 13px;
+  border: 1px solid #f1c9d3;
+  border-radius: 10px;
+  background: #fff2f5;
+  color: #a33852;
+  font-size: 13px;
+}
+
+.storage-warning {
+  margin-bottom: 20px;
+  padding: 13px 16px;
+  border: 1px solid #e8d4a1;
+  border-radius: 12px;
+  background: #fff8e8;
+  color: #7b581b;
+  font-size: 13px;
+}
+
+/* Длинные названия не должны растягивать карточки. */
+.subject-card h3,
+.subject-description,
+.placeholder-page h1 {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .subject-modal {
+    padding: 22px 18px;
+  }
+
+  .subject-form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}

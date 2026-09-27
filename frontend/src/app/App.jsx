@@ -1,9 +1,18 @@
 import { useCallback, useState } from 'react';
 import { Sparkles, ArrowRight } from 'lucide-react';
+
 import Sidebar from '../components/layout/Sidebar.jsx';
 import Header from '../components/layout/Header.jsx';
 import DashboardPage from '../pages/DashboardPage.jsx';
+import CreateSubjectModal from '../components/subjects/CreateSubjectModal.jsx';
+
 import { demoUser } from '../mocks/dashboard.js';
+
+import {
+  loadSubjects,
+  saveSubjects,
+  createSubject,
+} from '../services/subjectStorage.js';
 
 const pageTitles = {
   dashboard: 'Мой кабинет',
@@ -39,6 +48,12 @@ function PlaceholderPage({ title, description, onBack }) {
 }
 
 export default function App() {
+  const [initialData] = useState(loadSubjects);
+
+  const [subjects, setSubjects] = useState(initialData.subjects);
+  const [storageWarning, setStorageWarning] = useState(initialData.warning);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+
   const [activePage, setActivePage] = useState('dashboard');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,6 +83,31 @@ export default function App() {
     setSelectedSubject(subject);
     setActivePage('subjects');
     setSearchQuery('');
+  }
+
+  function handleCreateSubject(values) {
+    let subject;
+
+    try {
+      subject = createSubject(values, subjects);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'Не удалось создать предмет.';
+    }
+
+    const updatedSubjects = [subject, ...subjects];
+
+    setSubjects(updatedSubjects);
+
+    // Убираем фильтр, чтобы новая карточка была видна.
+    setSearchQuery('');
+
+    if (initialData.canPersist) {
+      setStorageWarning(saveSubjects(updatedSubjects));
+    }
+
+    return '';
   }
 
   const showDashboard =
@@ -100,6 +140,12 @@ export default function App() {
           className="page-content"
           tabIndex={-1}
         >
+          {storageWarning && (
+            <p className="storage-warning" role="alert">
+              {storageWarning}
+            </p>
+          )}
+
           {selectedSubject ? (
             <PlaceholderPage
               title={selectedSubject.title}
@@ -108,8 +154,10 @@ export default function App() {
             />
           ) : showDashboard ? (
             <DashboardPage
+              subjects={subjects}
               searchQuery={searchQuery}
               onOpenSubject={handleOpenSubject}
+              onAddSubject={() => setIsCreateOpen(true)}
               subjectsOnly={activePage === 'subjects'}
             />
           ) : (
@@ -121,6 +169,13 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {isCreateOpen && (
+        <CreateSubjectModal
+          onClose={() => setIsCreateOpen(false)}
+          onCreate={handleCreateSubject}
+        />
+      )}
     </>
   );
 }
