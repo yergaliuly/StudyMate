@@ -1216,3 +1216,266 @@ svg {
 .danger-button:hover {
   background: #a22f49;
 }
+
+/* Страница отдельного предмета */
+
+.subject-page {
+  display: grid;
+  gap: 24px;
+}
+
+.subject-back {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #63709a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subject-back:hover {
+  color: var(--primary);
+}
+
+.subject-overview {
+  padding: 28px;
+  background: linear-gradient(
+    135deg,
+    #ffffff 60%,
+    var(--tone-soft)
+  );
+}
+
+.subject-overview-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.subject-identity {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  flex: 1;
+}
+
+.subject-large-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 19px;
+}
+
+.subject-identity-copy {
+  min-width: 0;
+}
+
+.subject-identity h1 {
+  margin-top: 6px;
+  font-size: clamp(24px, 2.8vw, 32px);
+  line-height: 1.25;
+  letter-spacing: -0.8px;
+  overflow-wrap: anywhere;
+}
+
+.subject-page-description {
+  max-width: 760px;
+  margin-top: 20px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.subject-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.subject-page .secondary-button {
+  gap: 8px;
+}
+
+.subject-page-actions .subject-delete-button {
+  border-color: #efd9e0;
+  color: #ac3c56;
+}
+
+.subject-page-actions .subject-delete-button:hover {
+  background: #fff1f5;
+  color: #962d46;
+}
+
+.subject-page-notice {
+  margin-top: 22px;
+}
+
+/* Поиск и список материалов */
+
+.subject-upload-hint {
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.materials-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.lecture-search {
+  max-width: 440px;
+  background: #ffffff;
+  border-color: var(--border);
+}
+
+.materials-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lectures-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+/* Карточка лекции */
+
+.lecture-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 22px;
+}
+
+.lecture-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.lecture-card h3 {
+  font-size: 17px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.lecture-description {
+  margin: 9px 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.lecture-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.lecture-card-footer > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.lecture-card-note {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* Пустой список материалов */
+
+.materials-empty {
+  min-height: 260px;
+  align-content: center;
+}
+
+.materials-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 74px;
+  height: 74px;
+  border-radius: 22px;
+  background: linear-gradient(140deg, #edf2ff, #f2ecff);
+  color: #7770dd;
+}
+
+.materials-empty p {
+  max-width: 410px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Адаптивность страницы предмета */
+
+@media (max-width: 1100px) {
+  .subject-overview-top {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .subject-overview {
+    padding: 22px 18px;
+  }
+
+  .subject-identity {
+    gap: 13px;
+  }
+
+  .subject-large-icon {
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+  }
+
+  .subject-page-actions {
+    width: 100%;
+  }
+
+  .subject-page-actions .secondary-button {
+    flex: 1;
+  }
+
+  .materials-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .lecture-search {
+    max-width: none;
+  }
+
+  .lectures-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lecture-card {
+    padding: 20px;
+  }
+}
