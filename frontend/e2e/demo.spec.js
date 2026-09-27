@@ -58,6 +58,31 @@ async function openSubjectAction(page, title, action) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/auth/csrf', async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        data: {
+          headerName: 'X-CSRF-TOKEN',
+          token: 'smoke-test-csrf-token',
+        },
+      },
+    });
+  });
+
+  await page.route('**/api/v1/auth/me', async (route) => {
+    await route.fulfill({
+      status: 401,
+      json: {
+        error: {
+          code: 'AUTHENTICATION_REQUIRED',
+          message: 'Войди в аккаунт.',
+          fieldErrors: {},
+        },
+      },
+    });
+  });
+
   await page.goto('/');
 });
 
