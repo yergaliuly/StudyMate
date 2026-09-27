@@ -1,28 +1,126 @@
-export default function App() {
+import { useCallback, useState } from 'react';
+import { Sparkles, ArrowRight } from 'lucide-react';
+import Sidebar from '../components/layout/Sidebar.jsx';
+import Header from '../components/layout/Header.jsx';
+import DashboardPage from '../pages/DashboardPage.jsx';
+import { demoUser } from '../mocks/dashboard.js';
+
+const pageTitles = {
+  dashboard: 'Мой кабинет',
+  subjects: 'Мои предметы',
+  lectures: 'Лекции',
+  flashcards: 'Карточки',
+  results: 'Результаты',
+  settings: 'Настройки',
+};
+
+function PlaceholderPage({ title, description, onBack }) {
   return (
-    <main className="setup-page">
-      <section className="setup-card" aria-labelledby="setup-title">
-        <div className="brand">
-          <span aria-hidden="true">🎓</span>
+    <section className="panel placeholder-page">
+      <span className="icon-tile tone-purple">
+        <Sparkles size={26} aria-hidden="true" />
+      </span>
 
-          <span>
-            Study<span className="brand-accent">Mate</span>
-          </span>
-        </div>
+      <p className="eyebrow">СЛЕДУЮЩИЕ ЭТАПЫ РАЗРАБОТКИ</p>
 
-        <p className="setup-badge">Первый этап · интерфейс</p>
+      <h1>{title}</h1>
+      <p>{description}</p>
 
-        <h1 id="setup-title">Твой помощник в учёбе</h1>
+      <button
+        type="button"
+        className="primary-button"
+        onClick={onBack}
+      >
+        Вернуться в кабинет
+        <ArrowRight size={18} aria-hidden="true" />
+      </button>
+    </section>
+  );
+}
 
-        <p className="setup-description">
-          Здесь появятся твои предметы, лекции, конспекты и тесты.
-          Учись, понимай и двигайся к своим целям.
-        </p>
+export default function App() {
+  const [activePage, setActivePage] = useState('dashboard');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSubject, setSelectedSubject] = useState(null);
 
-        <p className="setup-note">
-          Это проверка запуска. Учебные функции и ИИ пока не подключены.
-        </p>
-      </section>
-    </main>
+  const closeMenu = useCallback(() => {
+    setIsMenuOpen(false);
+  }, []);
+
+  function handleNavigate(page) {
+    setActivePage(page);
+    setSelectedSubject(null);
+    setSearchQuery('');
+    closeMenu();
+  }
+
+  function handleSearchChange(value) {
+    setSearchQuery(value);
+    setSelectedSubject(null);
+
+    if (activePage !== 'dashboard' && activePage !== 'subjects') {
+      setActivePage('subjects');
+    }
+  }
+
+  function handleOpenSubject(subject) {
+    setSelectedSubject(subject);
+    setActivePage('subjects');
+    setSearchQuery('');
+  }
+
+  const showDashboard =
+    activePage === 'dashboard' || activePage === 'subjects';
+
+  return (
+    <>
+      <a className="skip-link" href="#main-content">
+        Перейти к содержимому
+      </a>
+
+      <Sidebar
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        isOpen={isMenuOpen}
+        onClose={closeMenu}
+      />
+
+      <div className="app-main">
+        <Header
+          user={demoUser}
+          searchQuery={searchQuery}
+          onSearchChange={handleSearchChange}
+          onOpenMenu={() => setIsMenuOpen(true)}
+          isMenuOpen={isMenuOpen}
+        />
+
+        <main
+          id="main-content"
+          className="page-content"
+          tabIndex={-1}
+        >
+          {selectedSubject ? (
+            <PlaceholderPage
+              title={selectedSubject.title}
+              description="Здесь будут лекции, конспекты и тесты по предмету. Страницу предмета реализуем следующим этапом."
+              onBack={() => handleNavigate('dashboard')}
+            />
+          ) : showDashboard ? (
+            <DashboardPage
+              searchQuery={searchQuery}
+              onOpenSubject={handleOpenSubject}
+              subjectsOnly={activePage === 'subjects'}
+            />
+          ) : (
+            <PlaceholderPage
+              title={pageTitles[activePage]}
+              description="Навигация уже работает. Содержимое этого раздела добавим на следующих этапах разработки."
+              onBack={() => handleNavigate('dashboard')}
+            />
+          )}
+        </main>
+      </div>
+    </>
   );
 }
