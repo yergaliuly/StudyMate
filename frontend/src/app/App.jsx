@@ -4,7 +4,9 @@ import { Sparkles, ArrowRight } from 'lucide-react';
 import Sidebar from '../components/layout/Sidebar.jsx';
 import Header from '../components/layout/Header.jsx';
 import DashboardPage from '../pages/DashboardPage.jsx';
-import CreateSubjectModal from '../components/subjects/CreateSubjectModal.jsx';
+
+import SubjectFormModal from '../components/subjects/SubjectFormModal.jsx';
+import DeleteSubjectModal from '../components/subjects/DeleteSubjectModal.jsx';
 
 import { demoUser } from '../mocks/dashboard.js';
 
@@ -12,6 +14,8 @@ import {
   loadSubjects,
   saveSubjects,
   createSubject,
+  updateSubject,
+  removeSubject,
 } from '../services/subjectStorage.js';
 
 const pageTitles = {
@@ -52,12 +56,23 @@ export default function App() {
 
   const [subjects, setSubjects] = useState(initialData.subjects);
   const [storageWarning, setStorageWarning] = useState(initialData.warning);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   const [activePage, setActivePage] = useState('dashboard');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSubject, setSelectedSubject] = useState(null);
+
+  const [selectedSubjectId, setSelectedSubjectId] = useState(null);
+
+  // null или объект с type: create, edit, delete.
+  const [subjectDialog, setSubjectDialog] = useState(null);
+
+  const selectedSubject =
+    subjects.find((subject) => subject.id === selectedSubjectId) ?? null;
+
+  const dialogSubject =
+    subjects.find(
+      (subject) => subject.id === subjectDialog?.subjectId,
+    ) ?? null;
 
   const closeMenu = useCallback(() => {
     setIsMenuOpen(false);
@@ -65,14 +80,14 @@ export default function App() {
 
   function handleNavigate(page) {
     setActivePage(page);
-    setSelectedSubject(null);
+    setSelectedSubjectId(null);
     setSearchQuery('');
     closeMenu();
   }
 
   function handleSearchChange(value) {
     setSearchQuery(value);
-    setSelectedSubject(null);
+    setSelectedSubjectId(null);
 
     if (activePage !== 'dashboard' && activePage !== 'subjects') {
       setActivePage('subjects');
@@ -80,38 +95,76 @@ export default function App() {
   }
 
   function handleOpenSubject(subject) {
-    setSelectedSubject(subject);
+    setSelectedSubjectId(subject.id);
     setActivePage('subjects');
     setSearchQuery('');
   }
 
-  function handleCreateSubject(values) {
-    let subject;
-
-    try {
-      subject = createSubject(values, subjects);
-    } catch (error) {
-      return error instanceof Error
-        ? error.message
-        : 'Не удалось создать предмет.';
-    }
-
-    const updatedSubjects = [subject, ...subjects];
-
+  function applySubjects(updatedSubjects) {
     setSubjects(updatedSubjects);
-
-    // Убираем фильтр, чтобы новая карточка была видна.
-    setSearchQuery('');
 
     if (initialData.canPersist) {
       setStorageWarning(saveSubjects(updatedSubjects));
     }
+  }
 
-    return '';
+  function handleSaveSubject(values) {
+    try {
+      const isEditing = subjectDialog?.type === 'edit';
+
+      const savedSubject = isEditing
+        ? updateSubject(subjectDialog.subjectId, values, subjects)
+        : createSubject(values, subjects);
+
+      const updatedSubjects = isEditing
+        ? subjects.map((subject) =>
+            subject.id === savedSubject.id ? savedSubject : subject,
+          )
+        : [savedSubject, ...subjects];
+
+      applySubjects(updatedSubjects);
+
+      // После переименования карточка не должна исчезнуть
+      // из-за старого поискового запроса.
+      setSearchQuery('');
+
+      return '';
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'Не удалось сохранить предмет.';
+    }
+  }
+
+  function handleDeleteSubject() {
+    if (subjectDialog?.type !== 'delete') {
+      return 'Не выбран предмет для удаления.';
+    }
+
+    try {
+      const subjectId = subjectDialog.subjectId;
+      const updatedSubjects = removeSubject(subjectId, subjects);
+
+      applySubjects(updatedSubjects);
+
+      if (selectedSubjectId === subjectId) {
+        setSelectedSubjectId(null);
+      }
+
+      return '';
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'Не удалось удалить предмет.';
+    }
   }
 
   const showDashboard =
     activePage === 'dashboard' || activePage === 'subjects';
+
+  const showSubjectForm =
+    subjectDialog?.type === 'create' ||
+    (subjectDialog?.type === 'edit' && dialogSubject !== null);
 
   return (
     <>
@@ -157,7 +210,21 @@ export default function App() {
               subjects={subjects}
               searchQuery={searchQuery}
               onOpenSubject={handleOpenSubject}
-              onAddSubject={() => setIsCreateOpen(true)}
+              onAddSubject={() =>
+                setSubjectDialog({ type: 'create' })
+              }
+              onEditSubject={(subject) =>
+                setSubjectDialog({
+                  type: 'edit',
+                  subjectId: subject.id,
+                })
+              }
+              onDeleteSubject={(subject) =>
+                setSubjectDialog({
+                  type: 'delete',
+                  subjectId: subject.id,
+                })
+              }
               subjectsOnly={activePage === 'subjects'}
             />
           ) : (
@@ -170,10 +237,22 @@ export default function App() {
         </main>
       </div>
 
-      {isCreateOpen && (
-        <CreateSubjectModal
-          onClose={() => setIsCreateOpen(false)}
-          onCreate={handleCreateSubject}
+      {showSubjectForm && (
+        <SubjectFormModal
+          key={subjectDialog.subjectId ?? 'new-subject'}
+          initialSubject={
+            subjectDialog.type === 'edit' ? dialogSubject : null
+          }
+          onClose={() => setSubjectDialog(null)}
+          onSave={handleSaveSubject}
+        />
+      )}
+
+      {subjectDialog?.type === 'delete' && dialogSubject && (
+        <DeleteSubjectModal
+          subject={dialogSubject}
+          onClose={() => setSubjectDialog(null)}
+          onConfirm={handleDeleteSubject}
         />
       )}
     </>
