@@ -35,6 +35,7 @@ function SessionPanel({ title, children }) {
 export default function App() {
   const [screen, setScreen] = useState('login');
   const [demoOpened, setDemoOpened] = useState(false);
+  const [authMessage, setAuthMessage] = useState('');
 
   const [session, setSession] = useState({
     status: 'initializing',
@@ -102,7 +103,19 @@ export default function App() {
     setRetryAttempt((current) => current + 1);
   }
 
+  function changeAuthMode(mode) {
+    setAuthMessage('');
+    setScreen(mode);
+  }
+
+  function handleRegistered() {
+    // Регистрация не создаёт сессию: остаёмся в состоянии guest.
+    setAuthMessage('Аккаунт создан. Теперь войдите.');
+    setScreen('login');
+  }
+
   function openDemo() {
+    setAuthMessage('');
     setDemoOpened(true);
     setScreen('demo');
   }
@@ -148,7 +161,9 @@ export default function App() {
             <AuthPage
               key={screen}
               mode={screen}
-              onModeChange={setScreen}
+              initialMessage={authMessage}
+              onRegistered={handleRegistered}
+              onModeChange={changeAuthMode}
               onOpenDemo={openDemo}
             />
           )}
@@ -186,7 +201,7 @@ export default function App() {
           hidden={screen !== 'demo'}
         >
           <DemoWorkspace
-            onOpenAuth={() => setScreen('login')}
+            onOpenAuth={() => changeAuthMode('login')}
           />
         </div>
       )}

@@ -86,7 +86,33 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-test('Регистрация проверяет поля и не имитирует создание аккаунта', async ({ page }) => {
+test('Регистрация проверяет поля, создаёт аккаунт и предлагает войти', async ({ page }) => {
+  const registerRequests = [];
+  let loginRequests = 0;
+
+  await page.route('**/api/v1/auth/register', async (route) => {
+    registerRequests.push({
+      method: route.request().method(),
+      body: route.request().postDataJSON(),
+      csrf: route.request().headers()['x-csrf-token'],
+    });
+
+    await route.fulfill({
+      status: 201,
+      json: {
+        data: {
+          id: 'eeb23f67-0b68-47e7-b865-d6a1d65e70a0',
+          email: 'e2e@example.com',
+          displayName: 'Тестовый студент',
+        },
+      },
+    });
+  });
+
+  await page.route('**/api/v1/auth/login', async (route) => {
+    loginRequests += 1;
+    await route.abort();
+  });
   await page.getByRole('button', {
     name: 'Зарегистрироваться',
     exact: true,
@@ -116,12 +142,14 @@ test('Регистрация проверяет поля и не имитиру�
     { exact: true },
   )).toBeVisible();
 
+  expect(registerRequests).toHaveLength(0);
+
   // Только вымышленные данные для проверки интерфейса.
   await page.getByLabel('Имя', { exact: true }).fill('Тестовый студент');
   await page.getByLabel('Email', { exact: true }).fill('e2e@example.com');
 
   await page.getByLabel('Пароль', { exact: true }).fill(
-    'Only-for-tests-2026!',
+    '  Only-for-tests-2026!  ',
   );
 
   await page.getByRole('button', {
@@ -130,14 +158,46 @@ test('Регистрация проверяет поля и не имитиру�
   }).click();
 
   await expect(page.getByRole('status')).toHaveText(
-    'Поля проверены. Регистрация ещё не подключена — аккаунт не создан.',
+    'Аккаунт создан. Теперь войдите.',
   );
 
   await expect(page.getByRole('heading', {
     level: 1,
-    name: 'Создать аккаунт',
+    name: 'С возвращением!',
     exact: true,
   })).toBeVisible();
+
+  await expect(page.getByLabel('Пароль', { exact: true })).toHaveValue('');
+  await expect(page.getByText('Аккаунт подключён к серверу', { exact: true }))
+    .not.toBeVisible();
+
+  expect(registerRequests).toEqual([{
+    method: 'POST',
+    body: {
+      displayName: 'Тестовый студент',
+      email: 'e2e@example.com',
+      password: '  Only-for-tests-2026!  ',
+    },
+    csrf: 'smoke-test-csrf-token',
+  }]);
+  expect(loginRequests).toBe(0);
+
+  const browserStorage = await page.evaluate(() => JSON.stringify({
+    local: { ...localStorage },
+    session: { ...sessionStorage },
+  }));
+
+  expect(browserStorage).not.toContain('Only-for-tests-2026!');
+  expect(browserStorage).not.toContain('smoke-test-csrf-token');
+  expect(browserStorage).not.toContain('e2e@example.com');
+
+  await page.reload();
+  await expect(page.getByRole('heading', {
+    level: 1,
+    name: 'С возвращением!',
+    exact: true,
+  })).toBeVisible();
+  expect(loginRequests).toBe(0);
 });
 
 test('Показ пароля работает, переключение формы очищает пароль', async ({ page }) => {
