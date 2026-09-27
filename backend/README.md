@@ -1,9 +1,10 @@
 # StudyMate backend
 
-Этап 3: аккаунты и `POST /api/v1/auth/register` поверх каркаса Spring Boot/PostgreSQL.
-Регистрация проверяется с реальной БД и включёнными фильтрами безопасности через MockMvc.
-CSRF обязателен; endpoint получения токена, вход, выход, текущий пользователь и сессии
-JDBC появятся на этапе 4. До этого полноценное подключение форм frontend недоступно.
+Этап 4: работают `GET /api/v1/auth/csrf`, `GET /api/v1/auth/me`,
+`POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`.
+Сессии хранятся в PostgreSQL; CSRF обязателен. Проверены реальные HTTP-запросы
+и сохранность сессии после перезапуска JAR. Frontend может подключать формы через authApi;
+проверка интерфейса с frontend-разработчиком остаётся отдельным шагом.
 Технический `GET /actuator/health` работает. Контракт: [API](../docs/api.md),
 дальнейшие этапы: [архитектура](../docs/architecture.md).
 
@@ -17,6 +18,7 @@ JDBC появятся на этапе 4. До этого полноценное 
 | Flyway | 12.4.0, из BOM Spring Boot |
 | PostgreSQL JDBC | 42.7.13, из BOM Spring Boot |
 | Spring Security | 7.1.1, из BOM Spring Boot |
+| Spring Session JDBC | 4.1.1, из BOM Spring Boot |
 | Bouncy Castle | bcprov-jdk18on 1.86, закреплён явно для Argon2 |
 | PostgreSQL | Major-версия 17; локальная проверка на 17.2 |
 
@@ -57,6 +59,9 @@ $env:STUDYMATE_DATABASE_URL = 'jdbc:postgresql://127.0.0.1:5432/studymate'
 $env:STUDYMATE_DATABASE_USERNAME = 'studymate'
 $taskDbCredential = Get-Credential -UserName 'studymate' -Message 'Пароль локальной базы'
 $env:STUDYMATE_DATABASE_PASSWORD = $taskDbCredential.GetNetworkCredential().Password
+$env:SPRING_PROFILES_ACTIVE = 'local'
+# Только если нужна регистрация тестовых аккаунтов:
+$env:STUDYMATE_REGISTRATION_ENABLED = 'true'
 .\mvnw.cmd -v
 .\mvnw.cmd spring-boot:run
 ```
@@ -84,12 +89,14 @@ Linux/macOS: `sh ./mvnw` вместо `.\mvnw.cmd`; нужны JDK 21, `unzip` �
 
 ## Что защищено сейчас
 
-Открыты GET health и маршрут POST регистрации, защищённый CSRF и флагом регистрации.
+Анонимно доступны GET health/CSRF и POST регистрации/входа/выхода; все POST требуют CSRF,
+регистрация дополнительно требует флага. GET `/auth/me` доступен только после входа.
 Остальные маршруты закрыты `denyAll`; анонимный GET получает `401 AUTHENTICATION_REQUIRED`,
 изменяющий запрос без CSRF — `403 CSRF_INVALID`. Эти ответы на будущих маршрутах
 **не означают их реализацию**.
 Нет стандартного пользователя Spring, HTML-формы входа и Basic Auth.
-Cookie-аутентификация, CORS/proxy и Spring Session JDBC добавляются на этапе 4.
+Cookie-аутентификация использует Spring Security и Spring Session JDBC.
+Подключение frontend — через один origin и Vite proxy (пример ниже); CORS не включён.
 Multipart отключён до согласования загрузки на этапе 8; R2 и ИИ пока не подключаются.
 
 MVC, servlet error dispatch и Spring Security используют
@@ -99,7 +106,7 @@ MVC, servlet error dispatch и Spring Security используют
 Неожиданные исключения дают безопасный 500; в журнал пишется тип без текста
 исключения, SQL или входных данных. Не включай подробные логи запросов с секретами.
 
-## Регистрация на этапе 3
+## Регистрация
 
 По умолчанию `STUDYMATE_REGISTRATION_ENABLED=false`, в том числе локально.
 Для явного включения в разработке перед запуском:
@@ -108,10 +115,10 @@ MVC, servlet error dispatch и Spring Security используют
 $env:STUDYMATE_REGISTRATION_ENABLED = 'true'
 ```
 
-Это разрешает создание аккаунтов, но не отключает CSRF и не добавляет вход.
+Это разрешает создание аккаунтов, но не отключает CSRF и не выполняет вход автоматически.
 Без токена POST возвращает `403 CSRF_INVALID`; с корректным токеном при закрытой
-регистрации — `403 REGISTRATION_CLOSED`. Пока `/auth/csrf` не реализован, токен
-предоставляет только тестовая инфраструктура Spring Security; обхода для браузера нет.
+регистрации — `403 REGISTRATION_CLOSED`. Токен получают через `GET /api/v1/auth/csrf`
+и отправляют в `X-CSRF-TOKEN` с той же cookie.
 Не считать этот этап готовым публичным запуском: частотные лимиты, политика доступа
 пилота и подтверждение email ещё впереди.
 
@@ -135,8 +142,59 @@ Email обрезается по правилам JS trim и приводится
 ## Миграции
 
 Каталог — `src/main/resources/db/migration/`. Flyway выполняется до готовности приложения;
-история — `public.flyway_schema_history`. V1 создаёт схему `studymate`, V2 — таблицу `users`.
-Применённая V1 не менялась. Правила: [migrations/README.md](migrations/README.md).
+история — `public.flyway_schema_history`. V1 создаёт схему `studymate`, V2 — таблицу `users`,
+V3 — таблицы сессий. Применённые V1/V2 не менялись. Схему сессий создаёт только Flyway.
+Правила: [migrations/README.md](migrations/README.md).
+
+## Сессии и локальное подключение frontend
+
+Cookie `STUDYMATE_SESSION`: HttpOnly, SameSite=Lax, Path=/, без Domain, без постоянного
+Max-Age. По умолчанию Secure=true; только профиль `local` отключает Secure для HTTP.
+Не включай `local` на размещённом сервере. Профиль сам не открывает регистрацию.
+Браузер должен обращаться к API через тот же origin; не смешивай localhost и 127.0.0.1.
+
+Бездействие ограничено 30 минутами, абсолютный срок — 12 часами после успешного входа.
+Повторный успешный вход меняет session id и отсчитывает 12 часов заново. Чтение `/auth/me`
+продлевает только срок бездействия. Анонимная сессия живёт максимум 12 часов от создания.
+Истечение проверяется до Security/CSRF; изменяющий запрос может получить 403 раньше 401.
+Spring Session удаляет просроченные по бездействию строки каждую минуту.
+
+В сессии — UUID аккаунта, контекст Spring Security и CSRF; пароль, хеш и профиль туда
+не записываются. `/auth/me` читает актуального пользователя из БД. Вход использует
+AuthenticationManager/ProviderManager, смену session id и CsrfAuthenticationStrategy,
+затем явно сохраняет SecurityContext. Неизвестный email тоже проходит проверку Argon2
+с фиктивным хешем; клиент получает тот же `401 INVALID_CREDENTIALS`, что при неверном пароле.
+Выход выполняет штатный LogoutFilter: удаление сессии/атрибутов, cookie и старого CSRF;
+ответ — `204` без тела. GET не выполняет выход. Ошибки доступа к БД при загрузке/сохранении
+сессии обрабатываются вне MVC и возвращают безопасный `503 SERVICE_UNAVAILABLE`.
+
+Основания: [сохранение аутентификации](https://docs.spring.io/spring-security/reference/servlet/authentication/session-management.html),
+[CSRF и обновление токена](https://docs.spring.io/spring-security/reference/servlet/exploits/csrf.html),
+[Spring Session JDBC](https://docs.spring.io/spring-session/reference/configuration/jdbc.html).
+
+Ветка для интеграции — `feat/backend-auth`, база — `ae4c9b5c8d77e70f3b7a803337c51d106e122136`
+(включает PR #11 authApi, #12 регистрацию, #13 subjectApi). После push конкретный SHA:
+`git rev-parse HEAD`. Адрес backend: `http://127.0.0.1:8080`, путь API: `/api/v1`.
+
+Frontend-разработчику нужно добавить к своей Vite-конфигурации:
+
+```js
+server: {
+  proxy: {
+    '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+  },
+},
+```
+
+Оставить `VITE_API_BASE_URL=/api/v1` (это уже значение по умолчанию), без абсолютного URL.
+Текущий apiClient использует `mode: 'same-origin'`; произвольный другой origin не поддерживается.
+Исходники frontend этим этапом не меняются; proxy в текущем Vite config ещё не добавлен.
+
+Проверка с другом: `refreshCsrf` → `getCurrentUser` (гость) → `register` → `login` →
+`refreshCsrf` → `getCurrentUser` → перезагрузка страницы → `logout` → `refreshCsrf` →
+`getCurrentUser` (гость). authApi сбрасывает старый CSRF после входа/выхода, но новый
+нужно запрашивать отдельно. При смене аккаунта очищать приватные данные и отменять
+старые запросы. API предметов остаётся следующим этапом; его ответы 401/403 не означают готовность.
 
 ## Проверки
 
@@ -166,7 +224,7 @@ Remove-Variable taskTestCredential
 и запрет Flyway clean. Для регистрации проверяются 201/409/422, Unicode и длины,
 нормализация email, соль/хеш, запрет без CSRF, закрытый режим и одновременные запросы.
 Успешная регистрация проверяется через MockMvc с настоящей PostgreSQL и тестовым CSRF,
-а health/отказы без CSRF — также через настоящий HTTP. Браузерный сценарий — этап 4.
+а полный цикл auth — через настоящий HTTP с cookie, без тестовой подстановки CSRF.
 Тестовые контроллеры находятся только в `src/test/java`.
 Этап 2 проверен 2026-09-27 на Windows, JDK 21.0.6 и отдельном PostgreSQL 17.2:
 18 MVC-тестов и 4 интеграционных теста прошли без пропусков.
@@ -177,4 +235,17 @@ Remove-Variable taskTestCredential
 
 Этап 3: 57 быстрых и 10 интеграционных тестов прошли на той же связке JDK/PostgreSQL.
 Проверены чистая БД и обновление V1 → V2 с обычной ролью, неизменность аккаунтов и хешей
-после перезапуска временной PostgreSQL. Полный браузерный вход ещё не проверяется.
+после перезапуска временной PostgreSQL.
+
+Этап 4: 63 быстрых и 27 интеграционных тестов проходят без пропусков на Windows,
+JDK 21.0.6/PostgreSQL 17.2 с обычной ролью. Проверены V1→V3 на пустой БД, V2→V3 на БД
+этапа 3 с сохранением аккаунтов/хешей, cookie обоих профилей, реальная регистрация/вход/me/выход,
+неверные данные и CSRF, ротация, два аккаунта, истечение обоих сроков и удалённый пользователь.
+AuthRestartIT трижды запускает упакованный JAR в отдельных JVM: сессия и CSRF переживают
+перезапуск, выход сохраняется после следующего запуска. Тест требует `verify`, чтобы JAR
+был собран. Тесты оставляют только вымышленные аккаунты/сессии в отдельной тестовой БД.
+Полный UI-сценарий, Linux/macOS, Docker и размещение с HTTPS здесь не проверялись.
+Отдельный HTTP-прогон существующих frontend apiClient/authApi через Node с cookie jar
+прошёл без изменения их исходников. При остановке изолированного PostgreSQL проверены
+JSON 503 для существующей и новой сессии, затем восстановление доступа после запуска БД.
+Это проверка адаптера, не UI и не Vite proxy. Временные процессы приложения и БД остановлены.

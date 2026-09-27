@@ -12,7 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.studymate.common.api.ApiExceptionHandler;
-import com.studymate.config.BootstrapSecurityConfiguration;
+import com.studymate.config.SecurityConfiguration;
 import com.studymate.config.JsonConfiguration;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -27,7 +27,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(RegistrationController.class)
-@Import({BootstrapSecurityConfiguration.class, JsonConfiguration.class, ApiExceptionHandler.class})
+@Import({SecurityConfiguration.class, JsonConfiguration.class, ApiExceptionHandler.class})
 class RegistrationControllerTest {
   private static final String BODY = """
       {"email":" Student@Example.com ","password":"  Example-only pass!  ","displayName":" Айдана "}

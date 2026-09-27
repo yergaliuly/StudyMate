@@ -9,7 +9,13 @@ Flyway выполняет миграции при запуске. История
 `users_normalized_email_key` обеспечивает конкурентную уникальность email.
 Нормализация выполняется приложением (JS trim + lowercase Locale.ROOT); БД сравнивает
 готовые ключи с collation C, без неявной зависимости от locale сервера.
-Новые файлы имеют последовательные номера, начиная с `V3__description.sql`.
+V3 добавляет `studymate.spring_session` и `studymate.spring_session_attributes` по схеме
+Spring Session JDBC 4.1.1 для PostgreSQL: уникальный session id, индексы срока/владельца,
+атрибуты BYTEA и каскадное удаление атрибутов. В principal хранится UUID пользователя.
+Автоинициализация Spring Session отключена: `spring.session.jdbc.initialize-schema=never`.
+Просроченные по бездействию строки очищаются каждую минуту; доступ прекращается сразу
+по истечении срока, независимо от момента очистки. V1 и V2 не переписываются.
+Новые файлы имеют последовательные номера, начиная с `V4__description.sql`.
 В SQL указывать схему явно, например `studymate.users`, чтобы не зависеть от search_path.
 
 Включены проверка имён и контрольных сумм. `baseline-on-migrate` выключен:

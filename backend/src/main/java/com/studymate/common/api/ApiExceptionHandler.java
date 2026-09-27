@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -81,5 +82,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     log.error("Unhandled request failure (type={})", exception.getClass().getName());
     return handleExceptionInternal(exception, ApiErrors.forStatus(500), new HttpHeaders(),
         HttpStatus.INTERNAL_SERVER_ERROR, request);
+  }
+
+  @ExceptionHandler(BadCredentialsException.class)
+  ResponseEntity<Object> invalidCredentials(BadCredentialsException exception, WebRequest request) {
+    return handleExceptionInternal(exception,
+        ApiErrorResponse.of("INVALID_CREDENTIALS", "Неверный email или пароль."),
+        new HttpHeaders(), HttpStatus.UNAUTHORIZED, request);
   }
 }
