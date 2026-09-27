@@ -44,3 +44,7 @@ temp/
 
 # Do not commit the distribution archive itself
 *.zip
+
+# Playwright: generated test results
+/frontend/test-results/
+/frontend/playwright-report/
