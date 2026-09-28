@@ -55,7 +55,8 @@ class SubjectsIT extends PostgresIntegrationTest {
           "description", " \uFEFFSQL  \n tables\u00A0 ", "icon", "database", "tone", "purple"));
       var subject = a.client().data(response, 201);
       UUID id = UUID.fromString(subject.get("id").asString());
-      assertThat(subject.size()).isEqualTo(8);
+      assertThat(subject.size()).isEqualTo(9);
+      assertThat(subject.get("version").asLong()).isEqualTo(1);
       assertThat(subject.get("title").asString()).isEqualTo("Базы данных");
       assertThat(subject.get("description").asString()).isEqualTo("SQL  \n tables");
       assertThat(subject.get("lectureCount").asInt()).isZero();
@@ -248,7 +249,8 @@ class SubjectsIT extends PostgresIntegrationTest {
       "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"pink\"}",
       "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"blue\",\"ownerId\":\"forged\"}",
       "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"blue\",\"lectureCount\":42}",
-      "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"blue\",\"id\":\"forged\"}"})
+      "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"blue\",\"id\":\"forged\"}",
+      "{\"title\":\"Valid\",\"icon\":\"book\",\"tone\":\"blue\",\"version\":1}"})
   void invalidBodiesNeverCreateOrReserveAResult(String body) throws Exception {
     try (var a = account()) {
       UUID key = UUID.randomUUID();
