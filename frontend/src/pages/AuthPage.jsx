@@ -10,10 +10,54 @@ import {
   EyeOff,
 } from 'lucide-react';
 
+import { authApi } from '../services/authApi.js';
 import { validateAuthForm } from '../services/authValidation.js';
+import { LOGIN_NOT_CONFIRMED } from '../services/sessionFlow.js';
+
+const registrationMessages = {
+  EMAIL_ALREADY_EXISTS: 'Этот email уже зарегистрирован. Попробуй войти.',
+  REGISTRATION_CLOSED: 'Регистрация сейчас закрыта.',
+  VALIDATION_FAILED: 'Проверь отмеченные поля.',
+  SERVICE_UNAVAILABLE: 'Сервис временно недоступен. Попробуй позже.',
+  CSRF_INVALID: 'Не удалось проверить безопасность формы. Обнови страницу и попробуй снова.',
+  CSRF_NOT_INITIALIZED: 'Не удалось проверить безопасность формы. Обнови страницу и попробуй снова.',
+  NETWORK_ERROR: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
+  INVALID_RESPONSE: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
+};
+
+const loginMessages = {
+  INVALID_CREDENTIALS: 'Неверный email или пароль.',
+  VALIDATION_FAILED: 'Проверь отмеченные поля.',
+  CSRF_INVALID: registrationMessages.CSRF_INVALID,
+  CSRF_NOT_INITIALIZED: registrationMessages.CSRF_NOT_INITIALIZED,
+  SERVICE_UNAVAILABLE: registrationMessages.SERVICE_UNAVAILABLE,
+  LOGIN_NOT_CONFIRMED,
+};
+
+function loginErrorMessage(error) {
+  const message = loginMessages[error?.code];
+  return typeof message === 'string'
+    ? message
+    : 'Не удалось войти. Проверь подключение и попробуй позже.';
+}
+
+function registrationErrorMessage(error) {
+  const message = registrationMessages[error?.code];
+
+  if (typeof message === 'string') {
+    return message;
+  }
+
+  return error?.status >= 500
+    ? registrationMessages.SERVICE_UNAVAILABLE
+    : 'Не удалось создать аккаунт. Попробуй позже.';
+}
 
 export default function AuthPage({
   mode,
+  initialMessage = '',
+  onRegistered,
+  onLogin,
   onModeChange,
   onOpenDemo,
 }) {
@@ -21,6 +65,9 @@ export default function AuthPage({
 
   const formRef = useRef(null);
   const headingRef = useRef(null);
+  const requestRef = useRef(null);
+  const submitLockRef = useRef(false);
+  const serverErrorFocusRef = useRef('');
 
   const [values, setValues] = useState({
     displayName: '',
@@ -29,12 +76,25 @@ export default function AuthPage({
   });
 
   const [errors, setErrors] = useState({});
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(initialMessage);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
+
+    return () => requestRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (!isSubmitting && serverErrorFocusRef.current) {
+      formRef.current?.elements
+        .namedItem(serverErrorFocusRef.current)
+        ?.focus();
+
+      serverErrorFocusRef.current = '';
+    }
+  }, [isSubmitting]);
 
   const fields = [
     ...(isRegister
@@ -84,8 +144,13 @@ export default function AuthPage({
     setMessage('');
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
+
+    // Синхронная защита, в том числе до перерисовки disabled-кнопки.
+    if (submitLockRef.current) {
+      return;
+    }
     setMessage('');
 
     const nextErrors = validateAuthForm(values, mode);
@@ -102,13 +167,56 @@ export default function AuthPage({
       return;
     }
 
-    // Здесь позже будет await запроса к API.
-    // Сейчас не создаём пользователя и не имитируем вход.
-    setMessage(
-      isRegister
-        ? 'Поля проверены. Регистрация ещё не подключена — аккаунт не создан.'
-        : 'Поля проверены. Вход ещё не подключён — сессия не создана.',
-    );
+    const controller = new AbortController();
+    requestRef.current = controller;
+    submitLockRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      if (isRegister) {
+        await authApi.register(values, { signal: controller.signal });
+      } else {
+        await onLogin(values, { signal: controller.signal });
+      }
+
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setValues({ displayName: '', email: '', password: '' });
+      setShowPassword(false);
+      if (isRegister) {
+        onRegistered();
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      // Неверный email и неверный пароль всегда дают одно общее сообщение.
+      const allowedFields = isRegister
+        ? ['displayName', 'email', 'password']
+        : error?.code === 'VALIDATION_FAILED' ? ['email', 'password'] : [];
+      const serverErrors = Object.fromEntries(
+        allowedFields
+          .filter((field) => typeof error?.fieldErrors?.[field] === 'string')
+          .map((field) => [field, error.fieldErrors[field]]),
+      );
+
+      setErrors(serverErrors);
+      serverErrorFocusRef.current = Object.keys(serverErrors)[0] ?? '';
+      setMessage(isRegister ? registrationErrorMessage(error) : loginErrorMessage(error));
+      // POST автоматически не повторяем: результат мог сохраниться.
+    } finally {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        submitLockRef.current = false;
+
+        if (!controller.signal.aborted) {
+          setIsSubmitting(false);
+        }
+      }
+    }
   }
 
   return (
@@ -179,7 +287,7 @@ export default function AuthPage({
           aria-labelledby="auth-title"
         >
           <span className="demo-badge">
-            Предпросмотр форм
+            {isRegister ? 'Регистрация' : 'Вход'}
           </span>
 
           <h1
@@ -202,6 +310,7 @@ export default function AuthPage({
             ref={formRef}
             className="auth-form"
             onSubmit={handleSubmit}
+            aria-busy={isSubmitting}
             noValidate
           >
             {fields.map((field) => {
@@ -248,6 +357,7 @@ export default function AuthPage({
                       spellCheck={false}
                       placeholder={field.placeholder}
                       value={values[field.name]}
+                      disabled={isSubmitting}
                       onChange={(event) =>
                         updateField(
                           field.name,
@@ -330,16 +440,19 @@ export default function AuthPage({
             <button
               type="submit"
               className="primary-button auth-submit"
+              disabled={isSubmitting}
             >
-              {isRegister ? 'Создать аккаунт' : 'Войти'}
+              {isSubmitting
+                ? isRegister ? 'Создаём аккаунт…' : 'Входим…'
+                : isRegister ? 'Создать аккаунт' : 'Войти'}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           </form>
 
           <p className="auth-development-note">
-            Сейчас проверяются только поля формы.
-            Данные не отправляются на сервер, аккаунты
-            не создаются. Используй тестовые значения.
+            {isRegister
+              ? 'После регистрации нужно войти в аккаунт.'
+              : 'Вход в аккаунт StudyMate. Демо доступно без аккаунта.'}
           </p>
 
           <p className="auth-switch">
@@ -349,6 +462,7 @@ export default function AuthPage({
 
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() =>
                 onModeChange(
                   isRegister ? 'login' : 'register',
@@ -370,6 +484,7 @@ export default function AuthPage({
               type="button"
               className="secondary-button auth-demo-button"
               onClick={onOpenDemo}
+              disabled={isSubmitting}
             >
               Открыть демо-кабинет
               <ArrowRight size={17} aria-hidden="true" />

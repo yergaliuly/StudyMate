@@ -342,3 +342,16 @@
     flex-direction: column;
   }
 }
+
+/* Проверка сессии и состояние соединения */
+
+.session-panel {
+  width: min(100%, 580px);
+}
+
+.session-panel-content {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  overflow-wrap: anywhere;
+}

@@ -113,6 +113,7 @@ export default function Sidebar({
   onNavigate,
   isOpen,
   onClose,
+  navigationId = 'mobile-navigation',
 }) {
   const dialogRef = useRef(null);
 
@@ -181,7 +182,7 @@ export default function Sidebar({
 
       <dialog
         ref={dialogRef}
-        id="mobile-navigation"
+        id={navigationId}
         className="sidebar mobile-sidebar"
         aria-label="Меню StudyMate"
         onClick={handleBackdropClick}

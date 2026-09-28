@@ -48,12 +48,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run API adapter tests
+      - name: Run API and session tests
         run: >-
           node --test
           tests/apiClient.test.js
           tests/authApi.test.js
           tests/subjectApi.test.js
+          tests/sessionFlow.test.js
 
       - name: Build frontend
         run: npm run build
