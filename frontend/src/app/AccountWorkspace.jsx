@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpen, CircleCheck, LogOut, Sparkles } from 'lucide-react';
+import { CircleCheck, LogOut, Sparkles } from 'lucide-react';
 
 import Header from '../components/layout/Header.jsx';
 import Sidebar from '../components/layout/Sidebar.jsx';
+import AccountSubjects from '../components/subjects/AccountSubjects.jsx';
 import '../styles/account.css';
 
 const pageTitles = {
@@ -31,6 +32,10 @@ export default function AccountWorkspace({
   onLogout,
   onOpenDemo,
   message = '',
+  draftRef,
+  detailRef,
+  onAccessError,
+  onAccessRestored,
 }) {
   const [activePage, setActivePage] = useState('dashboard');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -119,40 +124,40 @@ export default function AccountWorkspace({
             </div>
           </section>
 
-          <section className="panel account-placeholder">
-            <span className="icon-tile tone-purple">
-              {showSubjects ? (
-                <BookOpen size={25} aria-hidden="true" />
-              ) : (
+          {showSubjects ? (
+            <AccountSubjects
+              draftRef={draftRef}
+              detailRef={detailRef}
+              onAccessError={onAccessError}
+              onAccessRestored={onAccessRestored}
+            />
+          ) : (
+            <section className="panel account-placeholder">
+              <span className="icon-tile tone-purple">
                 <Sparkles size={25} aria-hidden="true" />
-              )}
-            </span>
-
-            <h2>{showSubjects ? 'Предметы аккаунта' : pageTitles[activePage]}</h2>
-
-            <p>
-              {showSubjects
-                ? 'Предметы аккаунта подключим следующим шагом.'
-                : activePage === 'settings'
+              </span>
+              <h2>{pageTitles[activePage]}</h2>
+              <p>
+                {activePage === 'settings'
                   ? 'Редактирование профиля добавим на следующем этапе.'
                   : 'Этот раздел добавим на следующих этапах разработки.'}
-            </p>
-
-            <div className="account-demo-entry">
-              <p>
-                В демо можно попробовать предметы и PDF. Демо-предметы
-                сохраняются отдельно в этом браузере, PDF — до перезагрузки страницы.
               </p>
+            </section>
+          )}
 
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={onOpenDemo}
-              >
-                Открыть демо-кабинет
-              </button>
-            </div>
-          </section>
+          <div className="panel account-placeholder account-demo-entry">
+            <p>
+              В демо можно попробовать предметы и PDF. Демо-предметы
+              сохраняются отдельно в этом браузере, PDF — до перезагрузки страницы.
+            </p>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onOpenDemo}
+            >
+              Открыть демо-кабинет
+            </button>
+          </div>
         </main>
       </div>
     </div>

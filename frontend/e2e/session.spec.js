@@ -34,6 +34,21 @@ async function mockSession(page, { authenticated = false } = {}) {
     onMe: null,
   };
 
+  await page.route('**/api/v1/subjects?*', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    await route.fulfill({
+      status: 200,
+      json: {
+        data: [],
+        meta: {
+          page: Number(params.get('page')),
+          pageSize: Number(params.get('pageSize')),
+          total: 0,
+        },
+      },
+    });
+  });
+
   await page.route('**/api/v1/auth/*', async (route) => {
     const request = route.request();
     const action = new URL(request.url()).pathname.split('/').at(-1);

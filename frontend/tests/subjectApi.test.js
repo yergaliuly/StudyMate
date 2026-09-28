@@ -13,6 +13,7 @@ const KEY = '773b6d14-d350-4c27-8db8-b3b1fdb5d159';
 
 const SUBJECT = {
   id: ID,
+  version: 1,
   title: 'Базы данных',
   description: 'SQL, таблицы и связи',
   icon: 'database',
@@ -132,6 +133,7 @@ test('Список: поиск передаётся серверу, meta сох�
   assert.equal(url.searchParams.get('pageSize'), '10');
   assert.deepEqual(result.meta, meta);
   assert.equal(result.subjects.length, 1);
+  assert.equal(result.subjects[0].version, 1);
   assert.equal(calls[0].options.body, undefined);
 
   assert.equal(
@@ -181,6 +183,7 @@ test('Предмет: UUID сервера, lectureCount → lectures, null не 
 
   assert.deepEqual(result, {
     id: ID,
+    version: 1,
     title: SUBJECT.title,
     description: SUBJECT.description,
     icon: 'database',
@@ -210,6 +213,7 @@ test('Создание: только поля формы, CSRF и передан
   const result = await api.create({
     ...FORM,
     id: 'local-id',
+    version: 900,
     ownerId: 'do-not-send',
     userId: 'do-not-send',
     lectures: 99,
@@ -244,6 +248,7 @@ test('Создание: только поля формы, CSRF и передан
   });
 
   assert.equal(result.id, ID);
+  assert.equal(result.version, 1);
   assert.equal(result.lectures, 0);
   assert.equal(result.progress, null);
 
@@ -546,6 +551,8 @@ test('AbortSignal передаётся всеми методами', async () =>
 
     json({ data: SUBJECT }),
     json({ data: SUBJECT }, 201),
+    json({ data: { ...SUBJECT, version: 2 } }),
+    new Response(null, { status: 204 }),
   );
 
   const controller = new AbortController();
@@ -561,16 +568,268 @@ test('AbortSignal передаётся всеми методами', async () =>
     idempotencyKey: KEY,
   });
 
+  await api.update(ID, { title: SUBJECT.title }, { version: 1, signal });
+  await api.remove(ID, { signal });
+
   for (const call of calls.slice(1)) {
     assert.equal(call.options.signal, signal);
   }
 
   controller.abort();
 
-  await assert.rejects(
-    api.list({ signal }),
-    errorIs('REQUEST_CANCELLED'),
+  for (const request of [
+    () => api.list({ signal }),
+    () => api.getById(ID, { signal }),
+    () => api.create(FORM, { idempotencyKey: KEY, signal }),
+    () => api.update(ID, { title: SUBJECT.title }, { version: 1, signal }),
+    () => api.remove(ID, { signal }),
+  ]) {
+    await assert.rejects(request(), errorIs('REQUEST_CANCELLED'));
+  }
+
+  assert.equal(calls.length, 6);
+});
+
+test('Старый сохранённый ответ создания без version остаётся доступен', async () => {
+  const legacySubject = { ...SUBJECT };
+  delete legacySubject.version;
+
+  const { api, client, calls } = setup(
+    csrf(),
+    json({ data: legacySubject }, 201),
   );
 
-  assert.equal(calls.length, 4);
+  await client.refreshCsrf();
+  const result = await api.create(FORM, { idempotencyKey: KEY });
+
+  assert.equal(result.id, ID);
+  assert.equal(result.title, SUBJECT.title);
+  assert.equal(result.version, undefined);
+  assert.equal(calls.length, 2);
+});
+
+test('Список и GET требуют положительную безопасную целую version', async () => {
+  for (const version of [undefined, null, 0, -1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
+    const data = { ...SUBJECT, version };
+
+    const single = setup(json({ data }));
+    await assert.rejects(single.api.getById(ID), errorIs('INVALID_RESPONSE', 200));
+
+    const list = setup(json({
+      data: [data],
+      meta: { page: 1, pageSize: 20, total: 1 },
+    }));
+    await assert.rejects(list.api.list(), errorIs('INVALID_RESPONSE', 200));
+  }
+
+  const { api } = setup(json({
+    data: { ...SUBJECT, version: Number.MAX_SAFE_INTEGER },
+  }));
+  assert.equal((await api.getById(ID)).version, Number.MAX_SAFE_INTEGER);
+});
+
+test('Создание отклоняет переданную сервером некорректную version', async () => {
+  for (const version of [null, 0, -1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
+    const { api, client, calls } = setup(
+      csrf(),
+      json({ data: { ...SUBJECT, version } }, 201),
+    );
+    await client.refreshCsrf();
+
+    await assert.rejects(
+      api.create(FORM, { idempotencyKey: KEY }),
+      errorIs('INVALID_RESPONSE', 201),
+    );
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('PATCH нормализует поля формы, передаёт CSRF и ожидаемую version без ключа', async () => {
+  const { api, client, calls } = setup(
+    csrf(),
+    json({ data: { ...SUBJECT, version: 8 } }),
+  );
+  await client.refreshCsrf();
+
+  const values = Object.freeze({
+    ...FORM,
+    version: 999,
+    id: KEY,
+    ownerId: 'private',
+    userId: 'private',
+    lectureCount: 99,
+    progressPercent: 65,
+    createdAt: 'private',
+    unknown: 'private',
+  });
+  const result = await api.update(ID, values, { version: 7 });
+  const { url, options } = calls[1];
+
+  assert.equal(url, `/api/v1/subjects/${ID}`);
+  assert.equal(options.method, 'PATCH');
+  assert.equal(options.headers.get('X-CSRF-TOKEN'), 'test-token');
+  assert.equal(options.headers.has('Idempotency-Key'), false);
+  assert.deepEqual(JSON.parse(options.body), {
+    version: 7,
+    title: SUBJECT.title,
+    description: SUBJECT.description,
+    icon: 'database',
+    tone: 'blue',
+  });
+  assert.equal(result.version, 8);
+  assert.equal(result.lectures, 0);
+  assert.equal(result.progress, null);
+  assert.equal(values.title, FORM.title);
+  assert.equal(values.version, 999);
+});
+
+test('Частичный PATCH сохраняет отсутствующие поля и позволяет очистить описание', async () => {
+  const inherited = Object.assign(Object.create({ title: 'Не отправлять', tone: 'green' }), {
+    description: ' \t ',
+  });
+
+  for (const [values, body] of [
+    [{ title: '  Новый\n предмет  ' }, { version: 1, title: 'Новый предмет' }],
+    [inherited, { version: 1, description: '' }],
+    [{ icon: 'code' }, { version: 1, icon: 'code' }],
+    [{ tone: 'green' }, { version: 1, tone: 'green' }],
+  ]) {
+    const { api, client, calls } = setup(
+      csrf(),
+      json({ data: { ...SUBJECT, version: 2 } }),
+    );
+    await client.refreshCsrf();
+    await api.update(ID, values, { version: 1 });
+    assert.deepEqual(JSON.parse(calls[1].options.body), body);
+  }
+});
+
+test('Неверные UUID, version и поля PATCH отклоняются до запроса', async () => {
+  const { api, calls } = setup();
+
+  for (const id of [null, '../auth/me', '', 123]) {
+    await assert.rejects(api.update(id, { title: 'Новое' }, { version: 1 }), TypeError);
+    await assert.rejects(api.remove(id), TypeError);
+  }
+
+  for (const version of [undefined, null, 0, -1, 1.5, '1', NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(api.update(ID, { title: 'Новое' }, { version }), RangeError);
+  }
+
+  for (const values of [undefined, null, [], 'title', 12]) {
+    await assert.rejects(api.update(ID, values, { version: 1 }), TypeError);
+  }
+
+  for (const values of [{}, { version: 1 }, { ownerId: KEY }, Object.create({ title: 'Новое' })]) {
+    await assert.rejects(api.update(ID, values, { version: 1 }), RangeError);
+  }
+
+  for (const field of ['title', 'description', 'icon', 'tone']) {
+    for (const value of [undefined, null, 1, {}, []]) {
+      await assert.rejects(api.update(ID, { [field]: value }, { version: 1 }), TypeError);
+    }
+  }
+
+  assert.equal(calls.length, 0);
+});
+
+test('PATCH и DELETE без CSRF не отправляются', async () => {
+  const { api, calls } = setup();
+
+  await assert.rejects(
+    api.update(ID, { title: 'Новое' }, { version: 1 }),
+    errorIs('CSRF_NOT_INITIALIZED'),
+  );
+  await assert.rejects(api.remove(ID), errorIs('CSRF_NOT_INITIALIZED'));
+  assert.equal(calls.length, 0);
+});
+
+test('PATCH принимает только полный предмет с тем же UUID и следующей version', async () => {
+  for (const [data, status] of [
+    [{ ...SUBJECT, version: 2 }, 201],
+    [{ ...SUBJECT, version: 2, id: KEY }, 200],
+    [{ ...SUBJECT, version: undefined }, 200],
+    [{ ...SUBJECT, version: 0 }, 200],
+    [{ ...SUBJECT, version: 1 }, 200],
+    [{ ...SUBJECT, version: 3 }, 200],
+    [{ ...SUBJECT, version: '2' }, 200],
+    [{ id: ID, version: 2 }, 200],
+    [{ ...SUBJECT, version: 2, lectureCount: -1 }, 200],
+    [null, 200],
+  ]) {
+    const { api, client, calls } = setup(csrf(), json({ data }, status));
+    await client.refreshCsrf();
+    await assert.rejects(
+      api.update(ID, { title: 'Новое' }, { version: 1 }),
+      errorIs('INVALID_RESPONSE', status),
+    );
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('DELETE отправляет CSRF без тела, version и ключа; принимает только 204', async () => {
+  const { api, client, calls } = setup(csrf(), new Response(null, { status: 204 }));
+  await client.refreshCsrf();
+
+  assert.equal(await api.remove(ID), undefined);
+  const { url, options } = calls[1];
+  assert.equal(url, `/api/v1/subjects/${ID}`);
+  assert.equal(options.method, 'DELETE');
+  assert.equal(options.body, undefined);
+  assert.equal(options.headers.get('X-CSRF-TOKEN'), 'test-token');
+  assert.equal(options.headers.has('Idempotency-Key'), false);
+  assert.equal(options.headers.has('Content-Type'), false);
+
+  for (const status of [200, 201]) {
+    const unexpected = setup(csrf(), json({ data: SUBJECT }, status));
+    await unexpected.client.refreshCsrf();
+    await assert.rejects(unexpected.api.remove(ID), errorIs('INVALID_RESPONSE', status));
+    assert.equal(unexpected.calls.length, 2);
+  }
+});
+
+test('Ошибки PATCH и DELETE сохраняют код, статус и ошибки полей без повторов', async () => {
+  for (const [method, status, code, fieldErrors] of [
+    ['update', 401, 'AUTHENTICATION_REQUIRED', {}],
+    ['update', 403, 'CSRF_INVALID', {}],
+    ['update', 404, 'SUBJECT_NOT_FOUND', {}],
+    ['update', 409, 'SUBJECT_VERSION_CONFLICT', {}],
+    ['update', 409, 'SUBJECT_TITLE_EXISTS', { title: 'Название занято.' }],
+    ['update', 422, 'VALIDATION_FAILED', { title: 'Проверь название.', icon: 'Проверь значок.' }],
+    ['update', 503, 'SERVICE_UNAVAILABLE', {}],
+    ['remove', 401, 'AUTHENTICATION_REQUIRED', {}],
+    ['remove', 403, 'CSRF_INVALID', {}],
+    ['remove', 404, 'SUBJECT_NOT_FOUND', {}],
+    ['remove', 409, 'SUBJECT_NOT_EMPTY', {}],
+    ['remove', 503, 'SERVICE_UNAVAILABLE', {}],
+  ]) {
+    const { api, client, calls } = setup(csrf(), failure(status, code, fieldErrors));
+    await client.refreshCsrf();
+    const request = method === 'update'
+      ? api.update(ID, { title: 'Новое' }, { version: 1 })
+      : api.remove(ID);
+
+    await assert.rejects(request, (error) => {
+      errorIs(code, status)(error);
+      assert.deepEqual(error.fieldErrors, fieldErrors);
+      return true;
+    });
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('Неоднозначный сетевой результат PATCH и DELETE не вызывает повтор или GET', async () => {
+  for (const method of ['update', 'remove']) {
+    const { api, client, calls } = setup(csrf(), () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await client.refreshCsrf();
+    const request = method === 'update'
+      ? api.update(ID, { description: '' }, { version: 1 })
+      : api.remove(ID);
+
+    await assert.rejects(request, errorIs('NETWORK_ERROR'));
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].options.method, method === 'update' ? 'PATCH' : 'DELETE');
+  }
 });
