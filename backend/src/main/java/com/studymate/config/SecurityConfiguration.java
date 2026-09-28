@@ -54,6 +54,7 @@ public class SecurityConfiguration {
             .requestMatchers(HttpMethod.GET, "/api/v1/subjects/*").authenticated()
             .requestMatchers(HttpMethod.PATCH, "/api/v1/subjects/*").authenticated()
             .requestMatchers(HttpMethod.DELETE, "/api/v1/subjects/*").authenticated()
+            .requestMatchers(HttpMethod.GET, "/api/v1/jobs/*").authenticated()
             .anyRequest().denyAll())
         .securityContext(context -> context.securityContextRepository(contexts))
         .csrf(csrf -> csrf.csrfTokenRepository(tokens))

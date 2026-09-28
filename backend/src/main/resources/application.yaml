@@ -44,6 +44,15 @@ spring:
       enabled: false
 
 studymate:
+  jobs:
+    enabled: ${STUDYMATE_JOBS_ENABLED:true}
+    poll-interval-ms: ${STUDYMATE_JOBS_POLL_INTERVAL_MS:1000}
+    heartbeat-interval-ms: ${STUDYMATE_JOBS_HEARTBEAT_INTERVAL_MS:5000}
+    lease-seconds: ${STUDYMATE_JOBS_LEASE_SECONDS:30}
+    execution-timeout-seconds: ${STUDYMATE_JOBS_EXECUTION_TIMEOUT_SECONDS:120}
+    max-attempts: ${STUDYMATE_JOBS_MAX_ATTEMPTS:3}
+    retry-delay-seconds: ${STUDYMATE_JOBS_RETRY_DELAY_SECONDS:2}
+    max-retry-delay-seconds: ${STUDYMATE_JOBS_MAX_RETRY_DELAY_SECONDS:60}
   registration:
     enabled: ${STUDYMATE_REGISTRATION_ENABLED:false}
 
