@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +23,10 @@ class AuthRestartIT {
     String cookie;
     String token;
     String id;
+    String subjectBody;
+    String subjectLocation;
+    var subjectInput = Map.of("title", "Persistent subject", "icon", "book", "tone", "blue");
+    var keyHeader = Map.of("Idempotency-Key", UUID.randomUUID().toString());
     String email = "restart-" + UUID.randomUUID() + "@example.com";
     try (var first = start(); var browser = new AuthHttpClient(first.port())) {
       id = browser.register(email);
@@ -29,11 +34,19 @@ class AuthRestartIT {
       browser.csrf();
       cookie = browser.cookie;
       token = browser.token;
+      var created = browser.send("POST", "/subjects", subjectInput, token, keyHeader);
+      browser.data(created, 201);
+      subjectBody = created.body();
+      subjectLocation = created.headers().firstValue("Location").orElseThrow();
     }
     try (var second = start(); var browser = new AuthHttpClient(second.port())) {
       browser.cookie = cookie;
       browser.token = token;
       assertThat(browser.data(browser.send("GET", "/auth/me", null, null), 200).get("id").asString()).isEqualTo(id);
+      var replay = browser.send("POST", "/subjects", subjectInput, token, keyHeader);
+      browser.data(replay, 201);
+      assertThat(replay.body()).isEqualTo(subjectBody);
+      assertThat(replay.headers().firstValue("Location")).hasValue(subjectLocation);
       assertThat(browser.send("POST", "/auth/logout", null, token).statusCode()).isEqualTo(204);
     }
     try (var third = start(); var browser = new AuthHttpClient(third.port())) {
@@ -42,6 +55,7 @@ class AuthRestartIT {
       assertThat(browser.error(browser.send("POST", "/auth/logout", null, token), 403)).isEqualTo("CSRF_INVALID");
       browser.csrf();
       assertThat(browser.data(browser.login(email), 200).get("id").asString()).isEqualTo(id);
+      assertThat(browser.data(browser.send("GET", "/subjects", null, null), 200).size()).isEqualTo(1);
     }
   }
 

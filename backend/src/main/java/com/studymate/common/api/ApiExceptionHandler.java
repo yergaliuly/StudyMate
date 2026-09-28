@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -64,15 +65,17 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     return super.handleExceptionInternal(exception, safeBody, safeHeaders, status, request);
   }
 
-  @ExceptionHandler(DataAccessResourceFailureException.class)
-  ResponseEntity<Object> databaseUnavailable(DataAccessResourceFailureException exception, WebRequest request) {
+  @ExceptionHandler({DataAccessResourceFailureException.class, TransactionException.class})
+  ResponseEntity<Object> databaseUnavailable(Exception exception, WebRequest request) {
     return handleExceptionInternal(exception, ApiErrors.forStatus(503), new HttpHeaders(),
         HttpStatus.SERVICE_UNAVAILABLE, request);
   }
 
   @ExceptionHandler(ApiException.class)
   ResponseEntity<Object> applicationError(ApiException exception, WebRequest request) {
-    return handleExceptionInternal(exception, exception.response(), new HttpHeaders(),
+    var headers = new HttpHeaders();
+    if (exception.retryAfterSeconds() != null) headers.set("Retry-After", exception.retryAfterSeconds().toString());
+    return handleExceptionInternal(exception, exception.response(), headers,
         exception.status(), request);
   }
 
