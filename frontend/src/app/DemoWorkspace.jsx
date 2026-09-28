@@ -54,7 +54,10 @@ function PlaceholderPage({ title, description, onBack }) {
   );
 }
 
-export default function DemoWorkspace({ onOpenAuth }) {
+export default function DemoWorkspace({
+  onOpenAuth,
+  authActionLabel = 'Открыть форму входа',
+}) {
   const [initialData] = useState(loadSubjects);
 
   const [subjects, setSubjects] = useState(initialData.subjects);
@@ -257,7 +260,7 @@ function handleAddLocalLecture(subjectId, values) {
               className="secondary-button"
               onClick={onOpenAuth}
             >
-              Открыть форму входа
+              {authActionLabel}
             </button>
           </div>
           {storageWarning && (

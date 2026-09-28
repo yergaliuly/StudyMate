@@ -6,6 +6,10 @@ export default function Header({
   onSearchChange,
   onOpenMenu,
   isMenuOpen,
+  navigationId = 'mobile-navigation',
+  showSearch = true,
+  demoBadge = true,
+  subtitle = 'Учебный профиль',
 }) {
   return (
     <header className="topbar">
@@ -15,27 +19,31 @@ export default function Header({
         onClick={onOpenMenu}
         aria-label="Открыть меню"
         aria-haspopup="dialog"
-        aria-controls="mobile-navigation"
+        aria-controls={navigationId}
         aria-expanded={isMenuOpen}
       >
         <Menu size={22} aria-hidden="true" />
       </button>
 
-      <label className="search-box">
-        <Search size={18} aria-hidden="true" />
+      {showSearch ? (
+        <label className="search-box">
+          <Search size={18} aria-hidden="true" />
 
-        <span className="visually-hidden">Поиск предметов</span>
+          <span className="visually-hidden">Поиск предметов</span>
 
-        <input
-          type="search"
-          placeholder="Поиск по предметам..."
-          value={searchQuery}
-          onChange={(event) => onSearchChange(event.target.value)}
-        />
-      </label>
+          <input
+            type="search"
+            placeholder="Поиск по предметам..."
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+          />
+        </label>
+      ) : (
+        <span className="account-header-title">Личный кабинет</span>
+      )}
 
       <div className="topbar-actions">
-        <span className="demo-badge header-demo">Демо</span>
+        {demoBadge && <span className="demo-badge header-demo">Демо</span>}
 
         <button
           type="button"
@@ -54,7 +62,7 @@ export default function Header({
 
           <div className="profile-copy">
             <strong>{user.name}</strong>
-            <span>Учебный профиль</span>
+            <span>{subtitle}</span>
           </div>
         </div>
       </div>

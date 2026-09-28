@@ -1,0 +1,147 @@
+.account-content {
+  display: grid;
+  gap: 24px;
+}
+
+.account-header-title {
+  min-width: 0;
+  margin-right: auto;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.account-workspace .topbar-actions,
+.account-workspace .profile,
+.account-workspace .profile-copy {
+  min-width: 0;
+}
+
+.account-workspace .topbar-actions {
+  flex-shrink: 1;
+}
+
+.account-workspace .profile-copy {
+  max-width: 260px;
+}
+
+.account-workspace .profile-copy strong,
+.account-workspace .profile-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-workspace .profile-avatar {
+  flex-shrink: 0;
+}
+
+.account-session-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border: 1px solid #dce8ef;
+  border-radius: 16px;
+  background: #f0f8f8;
+}
+
+.account-connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #357967;
+  font-size: 14px;
+}
+
+.account-session-banner .secondary-button {
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.account-overview {
+  padding: 28px;
+  background: linear-gradient(135deg, #ffffff 60%, #f2f1ff);
+}
+
+.account-overview h1 {
+  margin-top: 8px;
+  font-size: clamp(25px, 2.6vw, 33px);
+  line-height: 1.25;
+  letter-spacing: -0.8px;
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.account-identity > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-identity strong {
+  font-size: 17px;
+}
+
+.account-identity p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-avatar {
+  width: 54px;
+  height: 54px;
+  font-size: 20px;
+}
+
+.account-placeholder {
+  padding: 28px;
+}
+
+.account-placeholder h2 {
+  margin-top: 18px;
+  font-size: 21px;
+}
+
+.account-placeholder p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.account-demo-entry {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.account-demo-entry p {
+  margin-top: 0;
+}
+
+.account-demo-entry .secondary-button {
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .account-content {
+    gap: 18px;
+  }
+
+  .account-session-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
+
+  .account-overview,
+  .account-placeholder {
+    padding: 24px 20px;
+  }
+}

@@ -12,6 +12,7 @@ import {
 
 import { authApi } from '../services/authApi.js';
 import { validateAuthForm } from '../services/authValidation.js';
+import { LOGIN_NOT_CONFIRMED } from '../services/sessionFlow.js';
 
 const registrationMessages = {
   EMAIL_ALREADY_EXISTS: 'Этот email уже зарегистрирован. Попробуй войти.',
@@ -23,6 +24,22 @@ const registrationMessages = {
   NETWORK_ERROR: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
   INVALID_RESPONSE: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
 };
+
+const loginMessages = {
+  INVALID_CREDENTIALS: 'Неверный email или пароль.',
+  VALIDATION_FAILED: 'Проверь отмеченные поля.',
+  CSRF_INVALID: registrationMessages.CSRF_INVALID,
+  CSRF_NOT_INITIALIZED: registrationMessages.CSRF_NOT_INITIALIZED,
+  SERVICE_UNAVAILABLE: registrationMessages.SERVICE_UNAVAILABLE,
+  LOGIN_NOT_CONFIRMED,
+};
+
+function loginErrorMessage(error) {
+  const message = loginMessages[error?.code];
+  return typeof message === 'string'
+    ? message
+    : 'Не удалось войти. Проверь подключение и попробуй позже.';
+}
 
 function registrationErrorMessage(error) {
   const message = registrationMessages[error?.code];
@@ -40,6 +57,7 @@ export default function AuthPage({
   mode,
   initialMessage = '',
   onRegistered,
+  onLogin,
   onModeChange,
   onOpenDemo,
 }) {
@@ -149,20 +167,17 @@ export default function AuthPage({
       return;
     }
 
-    if (!isRegister) {
-      setMessage(
-        'Поля проверены. Вход ещё не подключён — сессия не создана.',
-      );
-      return;
-    }
-
     const controller = new AbortController();
     requestRef.current = controller;
     submitLockRef.current = true;
     setIsSubmitting(true);
 
     try {
-      await authApi.register(values, { signal: controller.signal });
+      if (isRegister) {
+        await authApi.register(values, { signal: controller.signal });
+      } else {
+        await onLogin(values, { signal: controller.signal });
+      }
 
       if (controller.signal.aborted) {
         return;
@@ -170,21 +185,27 @@ export default function AuthPage({
 
       setValues({ displayName: '', email: '', password: '' });
       setShowPassword(false);
-      onRegistered();
+      if (isRegister) {
+        onRegistered();
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
       }
 
+      // Неверный email и неверный пароль всегда дают одно общее сообщение.
+      const allowedFields = isRegister
+        ? ['displayName', 'email', 'password']
+        : error?.code === 'VALIDATION_FAILED' ? ['email', 'password'] : [];
       const serverErrors = Object.fromEntries(
-        ['displayName', 'email', 'password']
+        allowedFields
           .filter((field) => typeof error?.fieldErrors?.[field] === 'string')
           .map((field) => [field, error.fieldErrors[field]]),
       );
 
       setErrors(serverErrors);
       serverErrorFocusRef.current = Object.keys(serverErrors)[0] ?? '';
-      setMessage(registrationErrorMessage(error));
+      setMessage(isRegister ? registrationErrorMessage(error) : loginErrorMessage(error));
       // POST автоматически не повторяем: результат мог сохраниться.
     } finally {
       if (requestRef.current === controller) {
@@ -422,7 +443,7 @@ export default function AuthPage({
               disabled={isSubmitting}
             >
               {isSubmitting
-                ? 'Создаём аккаунт…'
+                ? isRegister ? 'Создаём аккаунт…' : 'Входим…'
                 : isRegister ? 'Создать аккаунт' : 'Войти'}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
@@ -431,7 +452,7 @@ export default function AuthPage({
           <p className="auth-development-note">
             {isRegister
               ? 'После регистрации нужно войти в аккаунт.'
-              : 'Вход пока не подключён. Демо доступно без аккаунта.'}
+              : 'Вход в аккаунт StudyMate. Демо доступно без аккаунта.'}
           </p>
 
           <p className="auth-switch">
