@@ -19,7 +19,7 @@ class SubjectRepository {
             normalized_description, icon, tone)
         VALUES (:id, :owner, :title, :titleKey, :description, :descriptionKey, :icon, :tone)
         ON CONFLICT ON CONSTRAINT subjects_owner_title_key DO NOTHING
-        RETURNING id, title, description, icon, tone, created_at
+        RETURNING id, title, description, icon, tone, created_at, version
         """)
         .param("id", UUID.randomUUID()).param("owner", owner)
         .param("title", input.title()).param("titleKey", TextInput.searchKey(input.title()))
@@ -32,7 +32,7 @@ class SubjectRepository {
     // A single statement gives the page and total one MVCC snapshot, even for an empty/out-of-range page.
     var rows = jdbc.sql("""
         WITH filtered AS (
-          SELECT id, title, description, icon, tone, created_at FROM studymate.subjects
+          SELECT id, title, description, icon, tone, created_at, version FROM studymate.subjects
           WHERE owner_id = :owner AND (:q = '' OR strpos(normalized_title, :q) > 0
               OR strpos(normalized_description, :q) > 0)
         ), page AS (
@@ -48,12 +48,43 @@ class SubjectRepository {
         new SubjectPage.Meta(query.page(), query.pageSize(), rows.getFirst().total()));
   }
 
+  Optional<SubjectResponse> find(UUID owner, UUID id, boolean forUpdate) {
+    return jdbc.sql("""
+        SELECT id, title, description, icon, tone, created_at, version FROM studymate.subjects
+        WHERE owner_id = :owner AND id = :id
+        """ + (forUpdate ? " FOR UPDATE" : ""))
+        .param("owner", owner).param("id", id).query((row, number) -> subject(row)).optional();
+  }
+
+  SubjectResponse update(UUID owner, UUID id, SubjectCreateRequest values) {
+    // Called after SELECT FOR UPDATE in the same transaction; the row cannot change or disappear.
+    return jdbc.sql("""
+        UPDATE studymate.subjects SET title = :title, normalized_title = :titleKey,
+            description = :description, normalized_description = :descriptionKey,
+            icon = :icon, tone = :tone, version = version + 1
+        WHERE owner_id = :owner AND id = :id
+        RETURNING id, title, description, icon, tone, created_at, version
+        """)
+        .param("owner", owner).param("id", id)
+        .param("title", values.title()).param("titleKey", TextInput.searchKey(values.title()))
+        .param("description", values.description()).param("descriptionKey", TextInput.searchKey(values.description()))
+        .param("icon", values.icon()).param("tone", values.tone())
+        .query((row, number) -> subject(row)).single();
+  }
+
+  boolean delete(UUID owner, UUID id) {
+    // Stage 8 must reference subjects with a non-cascading FK. PostgreSQL then also protects
+    // against concurrent material inserts and retains processing/deleting material references.
+    return jdbc.sql("DELETE FROM studymate.subjects WHERE owner_id = :owner AND id = :id")
+        .param("owner", owner).param("id", id).update() == 1;
+  }
+
   private record PageRow(SubjectResponse subject, long total) {}
 
   private static SubjectResponse subject(ResultSet row) throws SQLException {
     // No material storage exists until stage 8: every subject currently has exactly zero materials.
     // Do not persist this count or invent a progress value; replace count projection when materials arrive.
     return new SubjectResponse(row.getObject("id", UUID.class), row.getString("title"), row.getString("description"),
-        row.getString("icon"), row.getString("tone"), 0, null, row.getTimestamp("created_at").toInstant());
+        row.getString("icon"), row.getString("tone"), 0, null, row.getTimestamp("created_at").toInstant(), row.getLong("version"));
   }
 }

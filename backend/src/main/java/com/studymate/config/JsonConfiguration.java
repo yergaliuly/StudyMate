@@ -15,6 +15,11 @@ public class JsonConfiguration {
     return builder -> builder.withCoercionConfig(LogicalType.Textual, config -> config
         .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
         .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
-        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail));
+        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail))
+        .withCoercionConfig(LogicalType.Integer, config -> config
+            .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
+            .setCoercion(CoercionInputShape.EmptyString, CoercionAction.Fail)
+            .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+            .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail));
   }
 }

@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
-/** Starts the packaged application in two separate JVMs against the dedicated test database. */
+/** Starts the packaged application in three separate JVMs against the dedicated test database. */
 class AuthRestartIT {
   @Test
   void authenticatedSessionAndCsrfSurviveProcessRestartAndLogoutStaysEffective() throws Exception {
@@ -25,6 +25,7 @@ class AuthRestartIT {
     String id;
     String subjectBody;
     String subjectLocation;
+    String deletedSubjectId;
     var subjectInput = Map.of("title", "Persistent subject", "icon", "book", "tone", "blue");
     var keyHeader = Map.of("Idempotency-Key", UUID.randomUUID().toString());
     String email = "restart-" + UUID.randomUUID() + "@example.com";
@@ -38,6 +39,13 @@ class AuthRestartIT {
       browser.data(created, 201);
       subjectBody = created.body();
       subjectLocation = created.headers().firstValue("Location").orElseThrow();
+      String subjectPath = subjectLocation.substring("/api/v1".length());
+      assertThat(browser.data(browser.send("PATCH", subjectPath, Map.of("version", 1, "title", "Updated persistent subject"),
+          token), 200).get("version").asLong()).isEqualTo(2);
+      deletedSubjectId = browser.data(browser.send("POST", "/subjects",
+          Map.of("title", "Deleted before restart", "icon", "book", "tone", "blue"), token,
+          Map.of("Idempotency-Key", UUID.randomUUID().toString())), 201).get("id").asString();
+      assertThat(browser.send("DELETE", "/subjects/" + deletedSubjectId, null, token).statusCode()).isEqualTo(204);
     }
     try (var second = start(); var browser = new AuthHttpClient(second.port())) {
       browser.cookie = cookie;
@@ -47,6 +55,15 @@ class AuthRestartIT {
       browser.data(replay, 201);
       assertThat(replay.body()).isEqualTo(subjectBody);
       assertThat(replay.headers().firstValue("Location")).hasValue(subjectLocation);
+      String subjectPath = subjectLocation.substring("/api/v1".length());
+      var persisted = browser.data(browser.send("GET", subjectPath, null, null), 200);
+      assertThat(persisted.get("title").asString()).isEqualTo("Updated persistent subject");
+      assertThat(persisted.get("version").asLong()).isEqualTo(2);
+      assertThat(browser.error(browser.send("PATCH", subjectPath, Map.of("version", 1, "title", "Stale"), token), 409))
+          .isEqualTo("SUBJECT_VERSION_CONFLICT");
+      assertThat(browser.data(browser.send("PATCH", subjectPath, Map.of("version", 2, "description", "Saved after restart"),
+          token), 200).get("version").asLong()).isEqualTo(3);
+      assertThat(browser.error(browser.send("GET", "/subjects/" + deletedSubjectId, null, null), 404)).isEqualTo("SUBJECT_NOT_FOUND");
       assertThat(browser.send("POST", "/auth/logout", null, token).statusCode()).isEqualTo(204);
     }
     try (var third = start(); var browser = new AuthHttpClient(third.port())) {
@@ -56,6 +73,10 @@ class AuthRestartIT {
       browser.csrf();
       assertThat(browser.data(browser.login(email), 200).get("id").asString()).isEqualTo(id);
       assertThat(browser.data(browser.send("GET", "/subjects", null, null), 200).size()).isEqualTo(1);
+      var persisted = browser.data(browser.send("GET", subjectLocation.substring("/api/v1".length()), null, null), 200);
+      assertThat(persisted.get("description").asString()).isEqualTo("Saved after restart");
+      assertThat(persisted.get("version").asLong()).isEqualTo(3);
+      assertThat(browser.error(browser.send("GET", "/subjects/" + deletedSubjectId, null, null), 404)).isEqualTo("SUBJECT_NOT_FOUND");
     }
   }
 

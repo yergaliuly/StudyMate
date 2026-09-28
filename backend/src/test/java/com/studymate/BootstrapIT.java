@@ -53,6 +53,8 @@ class BootstrapIT extends PostgresIntegrationTest {
         Integer.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '4'",
         Integer.class)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM public.flyway_schema_history WHERE success AND version = '5'",
+        Integer.class)).isEqualTo(1);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class)
