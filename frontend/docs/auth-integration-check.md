@@ -55,7 +55,7 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
    `POST /auth/login` (`200`) → `GET /auth/csrf` (`200`) →
    `GET /auth/me` (`200`). Экран аккаунта показывает имя и email из `/me`,
    инициалы и сообщение о подключении к серверу. Демо-предметы и демонстрационный
-   прогресс не выдаются за данные аккаунта; подключение предметов — отдельный шаг.
+   прогресс не выдаются за данные аккаунта; список предметов загружается с сервера.
 8. Перезагрузите страницу. После проверки сессии снова открыт тот же аккаунт;
    повторного `POST /auth/login` нет.
 9. Откройте демо явной кнопкой, создайте там вымышленный предмет, вернитесь в
@@ -148,7 +148,7 @@ CSRF и `/me`, без автоматического повторения POST. 
 В отдельном PowerShell из каталога `frontend`:
 
 ```powershell
-node --test tests/apiClient.test.js tests/authApi.test.js tests/subjectApi.test.js tests/sessionFlow.test.js
+node --test tests/apiClient.test.js tests/authApi.test.js tests/subjectApi.test.js tests/sessionFlow.test.js tests/subjectDraft.test.js
 npm run build
 npx playwright test
 ```

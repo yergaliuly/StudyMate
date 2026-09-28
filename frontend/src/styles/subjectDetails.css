@@ -1,0 +1,176 @@
+.account-subject-details {
+  width: min(720px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
+.account-subject-details h2,
+.account-subject-details h3,
+.account-subject-details p,
+.account-subject-details dd,
+.account-subject-details button {
+  overflow-wrap: anywhere;
+}
+
+.account-subject-details button:disabled,
+.account-subject-details input:disabled,
+.account-subject-details textarea:disabled,
+.account-subject-details select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.subject-detail-notice {
+  margin: 18px 0;
+  padding: 13px 15px;
+  border: 1px solid #dfe1f5;
+  border-radius: 12px;
+  background: #f5f5ff;
+  color: #515a7d;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.subject-detail-unavailable {
+  margin: 22px 0;
+  font-size: 18px;
+}
+
+.subject-detail-view,
+.subject-detail-delete {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  margin-top: 22px;
+}
+
+.subject-detail-view h3 {
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+.subject-detail-description {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.subject-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.subject-detail-meta > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fafbff;
+}
+
+.subject-detail-meta dt,
+.subject-detail-comparison dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.subject-detail-meta dd,
+.subject-detail-comparison dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.subject-detail-actions,
+.subject-detail-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.subject-detail-actions .secondary-button,
+.subject-detail-delete .danger-button {
+  gap: 8px;
+}
+
+.subject-detail-delete-link {
+  color: #a33852;
+}
+
+.subject-detail-review {
+  display: grid;
+  gap: 15px;
+  min-width: 0;
+}
+
+.subject-detail-review > h3 {
+  font-size: 17px;
+}
+
+.subject-detail-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.subject-detail-comparison-card {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid #e0def4;
+  border-radius: 13px;
+  background: #f9f8ff;
+}
+
+.subject-detail-comparison-card h4 {
+  margin-bottom: 14px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.subject-detail-comparison-card dl {
+  margin: 0;
+}
+
+.subject-detail-comparison-card dd {
+  margin-bottom: 13px;
+  white-space: pre-wrap;
+}
+
+.subject-detail-comparison-card dd:last-child {
+  margin-bottom: 0;
+}
+
+.subject-detail-review-actions .secondary-button {
+  flex: 1 1 220px;
+  line-height: 1.5;
+}
+
+.subject-detail-delete > p {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+@media (max-width: 540px) {
+  .account-subject-details {
+    padding: 22px 18px;
+  }
+
+  .subject-detail-comparison,
+  .subject-detail-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .subject-detail-actions {
+    flex-direction: column;
+  }
+
+  .subject-detail-actions button,
+  .subject-detail-review-actions button {
+    width: 100%;
+    min-width: 0;
+  }
+}

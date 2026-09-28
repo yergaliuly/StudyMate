@@ -23,6 +23,7 @@ export default function SubjectCard({
   onOpen,
   onEdit,
   onDelete,
+  isDemo = true,
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -32,10 +33,10 @@ export default function SubjectCard({
 
   const Icon = subjectIcons[subject.icon] ?? BookOpen;
 
-  const progress = Math.min(
-    100,
-    Math.max(0, Number(subject.progress) || 0),
-  );
+  const progress = typeof subject.progress === 'number' && Number.isFinite(subject.progress)
+    ? Math.min(100, Math.max(0, subject.progress))
+    : null;
+  const hasActions = Boolean(onEdit || onDelete);
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -84,59 +85,66 @@ export default function SubjectCard({
           <Icon size={24} aria-hidden="true" />
         </span>
 
-        <div className="subject-card-controls">
-          <div
-            ref={actionsRef}
-            className="subject-actions"
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                setIsMenuOpen(false);
-              }
-            }}
-          >
-            <button
-              ref={toggleRef}
-              type="button"
-              className="icon-button subject-menu-toggle"
-              aria-label={`Действия с предметом «${subject.title}»`}
-              aria-expanded={isMenuOpen}
-              aria-controls={isMenuOpen ? actionsId : undefined}
-              onClick={() => setIsMenuOpen((current) => !current)}
-            >
-              <MoreHorizontal size={21} aria-hidden="true" />
-            </button>
-
-            {isMenuOpen && (
-              <div id={actionsId} className="subject-actions-menu">
+        {(hasActions || onOpen) && (
+          <div className="subject-card-controls">
+            {hasActions && (
+              <div
+                ref={actionsRef}
+                className="subject-actions"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setIsMenuOpen(false);
+                  }
+                }}
+              >
                 <button
+                  ref={toggleRef}
                   type="button"
-                  onClick={() => runAction(onEdit)}
+                  className="icon-button subject-menu-toggle"
+                  aria-label={`Действия с предметом «${subject.title}»`}
+                  aria-expanded={isMenuOpen}
+                  aria-controls={isMenuOpen ? actionsId : undefined}
+                  onClick={() => setIsMenuOpen((current) => !current)}
                 >
-                  <Pencil size={16} aria-hidden="true" />
-                  Редактировать
+                  <MoreHorizontal size={21} aria-hidden="true" />
                 </button>
 
-                <button
-                  type="button"
-                  className="subject-action-danger"
-                  onClick={() => runAction(onDelete)}
-                >
-                  <Trash2 size={16} aria-hidden="true" />
-                  Удалить
-                </button>
+                {isMenuOpen && (
+                  <div id={actionsId} className="subject-actions-menu">
+                    {onEdit && (
+                      <button type="button" onClick={() => runAction(onEdit)}>
+                        <Pencil size={16} aria-hidden="true" />
+                        Редактировать
+                      </button>
+                    )}
+
+                    {onDelete && (
+                      <button
+                        type="button"
+                        className="subject-action-danger"
+                        onClick={() => runAction(onDelete)}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                        Удалить
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
-          </div>
 
-          <button
-            type="button"
-            className="subject-open"
-            onClick={() => onOpen(subject)}
-            aria-label={`Открыть предмет «${subject.title}»`}
-          >
-            <ArrowRight size={19} aria-hidden="true" />
-          </button>
-        </div>
+            {onOpen && (
+              <button
+                type="button"
+                className="subject-open"
+                onClick={() => onOpen(subject)}
+                aria-label={`Открыть предмет «${subject.title}»`}
+              >
+                <ArrowRight size={19} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <h3>{subject.title}</h3>
@@ -147,19 +155,21 @@ export default function SubjectCard({
 
       <div className="subject-meta">
         <span>{subject.lectures} лекций</span>
-        <strong>{progress}%</strong>
+        {progress !== null && <strong>{progress}%</strong>}
       </div>
 
-      <div
-        className="progress-track"
-        role="progressbar"
-        aria-label={`Демонстрационный прогресс: ${subject.title}`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={progress}
-      >
-        <span style={{ width: `${progress}%` }} />
-      </div>
+      {progress !== null && (
+        <div
+          className="progress-track"
+          role="progressbar"
+          aria-label={`${isDemo ? 'Демонстрационный прогресс' : 'Прогресс'}: ${subject.title}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <span style={{ width: `${progress}%` }} />
+        </div>
+      )}
     </article>
   );
 }

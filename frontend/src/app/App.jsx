@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { GraduationCap } from 'lucide-react';
 
 import AuthPage from '../pages/AuthPage.jsx';
@@ -55,12 +55,25 @@ export default function App() {
   // Один владелец запросов сессии. Старые ответы не меняют новый экран.
   const operationRef = useRef(null);
   const pendingIntentRef = useRef(null);
+  // Черновик живёт только в памяти и возвращается только своему владельцу.
+  const subjectDraftRef = useRef(null);
+  const subjectDetailRef = useRef(null);
+  const draftOwnerRef = useRef(null);
+  const recoveringAccessRef = useRef(false);
 
   function acceptSession(user) {
+    if (user && draftOwnerRef.current !== user.id) {
+      subjectDraftRef.current = null;
+      subjectDetailRef.current = null;
+      draftOwnerRef.current = user.id;
+      recoveringAccessRef.current = false;
+    }
     const intent = pendingIntentRef.current;
+    if (intent === 'login') recoveringAccessRef.current = false;
     setAuthMessage(intent === 'logout'
       ? user ? LOGOUT_NOT_CONFIRMED : LOGGED_OUT
-      : intent === 'login' && !user ? LOGIN_NOT_CONFIRMED : '');
+      : intent === 'login' && !user ? LOGIN_NOT_CONFIRMED
+        : intent === 'reauth' && !user ? 'Сессия истекла. Войди снова.' : '');
     pendingIntentRef.current = null;
     setSession({ status: user ? 'authenticated' : 'guest', user });
   }
@@ -133,6 +146,10 @@ export default function App() {
     const controller = new AbortController();
     operationRef.current = controller;
     pendingIntentRef.current = 'logout';
+    subjectDraftRef.current = null;
+    subjectDetailRef.current = null;
+    draftOwnerRef.current = null;
+    recoveringAccessRef.current = false;
     setAuthMessage('');
     // Убираем приватный экран сразу; его локальное состояние уничтожается.
     setSession({ status: 'signingOut', user: null });
@@ -163,6 +180,7 @@ export default function App() {
   }, [screen]);
 
   function retrySession() {
+    recoveringAccessRef.current = false;
     operationRef.current?.abort();
     setScreen('login');
     setSession({
@@ -172,6 +190,24 @@ export default function App() {
 
     setRetryAttempt((current) => current + 1);
   }
+
+  const handleAccountAccessError = useCallback(() => {
+    // Не повторяем изменение после восстановления сессии: пользователь решит сам.
+    if (operationRef.current) return;
+    if (recoveringAccessRef.current) {
+      setSession({ status: 'error', user: null });
+      return;
+    }
+    recoveringAccessRef.current = true;
+    pendingIntentRef.current = 'reauth';
+    setScreen('login');
+    setSession({ status: 'initializing', user: null });
+    setRetryAttempt((current) => current + 1);
+  }, []);
+
+  const handleAccountAccessRestored = useCallback(() => {
+    recoveringAccessRef.current = false;
+  }, []);
 
   function changeAuthMode(mode) {
     setAuthMessage('');
@@ -252,6 +288,10 @@ export default function App() {
               message={authMessage}
               onLogout={handleLogout}
               onOpenDemo={openDemo}
+              draftRef={subjectDraftRef}
+              detailRef={subjectDetailRef}
+              onAccessError={handleAccountAccessError}
+              onAccessRestored={handleAccountAccessRestored}
             />
           )}
         </>
