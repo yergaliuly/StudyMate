@@ -65,10 +65,10 @@ class MaterialsIT extends PostgresIntegrationTest {
       UUID subject=subject(account); UUID key=UUID.randomUUID();
       var response=upload(account,subject,key,null,MaterialInputTest.PDF,"Лекция.pdf",true,false);
       var material=account.data(response,201); UUID id=UUID.fromString(material.get("id").asString());
-      assertThat(material.size()).isEqualTo(12);
+      assertThat(material.size()).isEqualTo(16);
       assertThat(material.get("title").asString()).isEqualTo("Лекция");
       assertThat(material.get("status").asString()).isEqualTo("stored");
-      assertThat(material.get("processingStatus").asString()).isEqualTo("not_started");
+      assertThat(material.get("processingStatus").asString()).isEqualTo("queued");
       assertThat(material.get("deletionJobId").isNull()).isTrue();
       assertThat(response.headers().firstValue("Location")).hasValue("/api/v1/materials/"+id);
       assertThat(response.body()).doesNotContain("objectKey","ownerId","sha256","lease","password");

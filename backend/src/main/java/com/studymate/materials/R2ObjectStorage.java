@@ -49,19 +49,56 @@ final class R2ObjectStorage implements ObjectStorage, AutoCloseable {
         while ((read = stream.read(buffer)) != -1) md5.update(buffer,0,read);
       }
       String checksum = Base64.getEncoder().encodeToString(md5.digest());
-      try (var body = content.get()) {
+      // Signing and sending can each request a stream even when HTTP retries are disabled.
+      // Servlet multipart files need reopening: their streams do not support mark/reset.
+      try (var body = new UploadBody(content)) {
         client.putObject(r -> r.bucket(bucket).key(key).contentType("application/pdf").contentLength(bytes)
               .contentDisposition("attachment; filename=\"material.pdf\"").cacheControl("private, no-store")
               .contentMD5(checksum)
               .metadata(Map.of("sha256", sha)),
-            RequestBody.fromInputStream(body, bytes));
+            RequestBody.fromContentProvider(body, bytes, "application/pdf"));
       }
     } catch (Exception failure) { throw new StorageFailure(); }
+  }
+
+  private static final class UploadBody implements software.amazon.awssdk.http.ContentStreamProvider,AutoCloseable {
+    private final Supplier<InputStream> source;
+    private InputStream current;
+    UploadBody(Supplier<InputStream> source) { this.source=source; }
+    public InputStream newStream() {
+      try { close(); } catch(java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+      current=source.get(); return current;
+    }
+    public void close() throws java.io.IOException {
+      if(current!=null) { try { current.close(); } finally { current=null; } }
+    }
   }
 
   public void delete(String key) {
     try { client.deleteObject(r -> r.bucket(bucket).key(key)); }
     catch (RuntimeException failure) { throw new StorageFailure(); }
+  }
+
+  public void fetch(String key, java.nio.file.Path target, long bytes, String sha256) {
+    try {
+      var digest=java.security.MessageDigest.getInstance("SHA-256");
+      try(var file=java.nio.file.Files.newOutputStream(target,java.nio.file.StandardOpenOption.CREATE_NEW)) {
+        var bounded=new java.io.FilterOutputStream(file) {
+          long count;
+          @Override public void write(int value) throws java.io.IOException { write(new byte[]{(byte)value},0,1); }
+          @Override public void write(byte[] data,int start,int length) throws java.io.IOException {
+            if(length>bytes-count || length>MaterialLimits.MAX_UPLOAD_BYTES-count) throw new ObjectIntegrityFailure();
+            out.write(data,start,length); digest.update(data,start,length); count+=length;
+          }
+        };
+        client.getObject(r -> r.bucket(bucket).key(key),software.amazon.awssdk.core.sync.ResponseTransformer.toOutputStream(bounded));
+        if(bounded.count!=bytes || !java.util.HexFormat.of().formatHex(digest.digest()).equals(sha256)) throw new ObjectIntegrityFailure();
+      }
+    } catch(Exception failure) {
+      for(Throwable cause=failure;cause!=null;cause=cause.getCause())
+        if(cause instanceof ObjectIntegrityFailure) throw new ObjectIntegrityFailure();
+      throw new StorageFailure();
+    }
   }
 
   public Download download(String key) {

@@ -1,5 +1,6 @@
 # StudyMate backend
 
+Этап 9: извлечение текста PDF в отдельной JVM, сохраняемые страницы, состояния и повтор обработки.
 Этап 8: материалы, приватный R2, квоты 25 МиБ/PDF и 500 МиБ/аккаунт, загрузка с
 Idempotency-Key, скачивание и сохраняемая очистка `material.delete`. title необязателен.
 Этап 7 добавил очередь PostgreSQL, аренду/heartbeat, повторы и `GET /api/v1/jobs/{id}`.
@@ -12,7 +13,8 @@ Idempotency-Key, скачивание и сохраняемая очистка `
 и сохранность сессии после перезапуска JAR. Frontend может подключать формы через authApi;
 проверка интерфейса с frontend-разработчиком остаётся отдельным шагом.
 Готовые apiClient/authApi/subjectApi проверены с настоящим сервером через HTTP.
-Извлечение текста PDF — следующий этап 9, автоматически не начинается.
+Новые загрузки автоматически получают PDF job; старые запускаются явным POST process.
+ИИ/конспекты относятся к следующему этапу 10, автоматически он не начинается.
 Технический `GET /actuator/health` работает. Контракт: [API](../docs/api.md),
 дальнейшие этапы: [архитектура](../docs/architecture.md).
 
@@ -29,6 +31,7 @@ Idempotency-Key, скачивание и сохраняемая очистка `
 | Spring Session JDBC | 4.1.1, из BOM Spring Boot |
 | Bouncy Castle | bcprov-jdk18on 1.86, закреплён явно для Argon2 |
 | AWS SDK Java | s3 и url-connection-client 2.55.7, закреплены явно |
+| Apache PDFBox | 3.0.8, дочерняя JVM; fontbox/pdfbox-io той же версии |
 | PostgreSQL | Major-версия 17; локальная проверка на 17.2 |
 
 Версии проверены 2026-09-27 по [требованиям Spring Boot](https://docs.spring.io/spring-boot/system-requirements.html),
@@ -190,8 +193,8 @@ AuthenticationManager/ProviderManager, смену session id и CsrfAuthenticati
 [CSRF и обновление токена](https://docs.spring.io/spring-security/reference/servlet/exploits/csrf.html),
 [Spring Session JDBC](https://docs.spring.io/spring-session/reference/configuration/jdbc.html).
 
-Ветка для интеграции — `feat/backend-materials`, база — `8701611cf2a30223c4b73349286213422204dd3b`
-(включает PR #20 с jobs и PR #21 с frontend subjects integration). После push конкретный SHA:
+Ветка для интеграции — `feat/backend-pdf-processing`, база — `4b55ed8`
+(включает PR #24 с материалами и PR #23 с frontend job tracking). После push конкретный SHA:
 `git rev-parse HEAD`. Адрес backend: `http://127.0.0.1:8080`, путь API: `/api/v1`.
 
 В текущей Vite-конфигурации уже есть host `127.0.0.1` и proxy:
@@ -350,8 +353,8 @@ Backoff: min(maxDelay, delay × 2^(attemptCount−1)); при стандартн
 404 JOB_NOT_FOUND. Ответ data содержит id/type/status/attemptCount/maxAttempts,
 createdAt/updatedAt/nextAttemptAt/finishedAt/resultId/error. Payload, ключ и аренда скрыты.
 Failed-задание читается с HTTP 200, его ошибка находится в data.error (code/message).
-Полный DTO — [API](../docs/api.md). Публичных enqueue/cancel/retry endpoints пока нет.
-Frontend получает jobId при DELETE материала и может опрашивать его состояние.
+Полный DTO — [API](../docs/api.md). Публичных enqueue/cancel/retry endpoints модуля jobs нет.
+Материалы выдают jobId при DELETE/process и processingJobId после upload.
 
 ## Материалы и приватный R2 (этап 8)
 
@@ -359,7 +362,7 @@ Frontend получает jobId при DELETE материала и может �
 истории попыток вместе с материалом. title необязателен; правила имени, полный Material,
 ошибки и FormData приведены в [api.md](../docs/api.md#материалы--реализованный-контракт-этапа-8).
 POST /materials возвращает **201** после подтверждения R2/БД, status=stored,
-processingStatus=not_started. PDF job не создаётся до этапа 9. DELETE возвращает **202**
+processingStatus=queued и processingJobId (добавлены этапом 9). DELETE возвращает **202**
 с materialId/jobId; текущий этап не создаёт конспекты, тесты или попытки.
 
 API: GET/POST /materials; GET/PATCH/DELETE /materials/{id}; GET /materials/{id}/download;
@@ -414,8 +417,60 @@ connect 5 с/socket 20 с/attempt 30 с/call 60 с. URL/SDK-секреты не 
 быть доступен только системному пользователю backend. После аварийной остановки ОС может
 оставить временные файлы: их штатная очистка и лимит диска нужны в настройке хостинга.
 Одновременно принимаются две загрузки на процесс, остальные получают 429/Retry-After: 2.
-Проверка PDF сейчас ограничена форматом/размером/header/EOF; полноценная структура,
-текстовый слой и изоляция дочернего PDF-процесса остаются этапом 9.
+В upload проверяются формат/размер/header/EOF. После загрузки отдельное задание проверяет
+структуру, текстовый слой и лимиты PDF; результат upload не означает готовность текста.
+
+## PDF и страницы текста (этап 9)
+
+Ветка `feat/backend-pdf-processing`, база `main`/`4b55ed8` после merge этапа 8 (PR #24).
+Работают POST /materials/{id}/process и GET /materials/{id}/pages; полный контракт,
+16 полей Material и ошибки — в [api.md](../docs/api.md#извлечение-текста-pdf--этап-9).
+PDFBox 3.0.8 закреплён по [официальным релизам](https://pdfbox.apache.org/download).
+Ограничения следуют [рекомендациям PDFBox](https://pdfbox.apache.org/security.html).
+
+Для обработки включить существующие STUDYMATE_R2_ENABLED и STUDYMATE_JOBS_ENABLED
+(jobs по умолчанию true). Новых секретов или сервиса не требуется. R2 доступен только
+через прежнюю production-конфигурацию с приватным HTTPS endpoint. Без R2 можно читать
+уже сохранённые страницы, новые процессоры не регистрируются; fake в production отсутствует.
+Регистрация и параметры локального запуска прежние, адрес http://127.0.0.1:8080.
+
+Сборка `mvnw.cmd package` (также test/process-classes) собирает минимальный worker JAR
+и копирует четыре зависимости в ресурсы pdf-worker. Обычный Spring Boot JAR содержит
+этот runtime; отдельный установленный pdfbox/Poppler/Python не нужен. Запускать на JDK 21.
+При запуске из IDE сначала выполнить `mvnw.cmd process-classes`, иначе runtime отсутствует
+и job получит PDF_WORKER_FAILED. `spring-boot:run` проходит этот lifecycle автоматически.
+
+Обработчик скачивает ровно ожидаемое количество байт, проверяет SHA-256 и запускает ребёнка
+без Spring/JDBC/R2 classpath. Пределы: 200 физических страниц, 100 000 UTF-16 символов
+на страницу, 1 000 000 суммарно, 60 секунд, heap 256 МиБ. Пробелы/переводы строк учитываются.
+Лимиты metaspace/direct/code cache: 64/16/32 МиБ. Один активный handler на backend-процесс;
+очередь, heartbeat и повторы сохраняются в PostgreSQL. Таймаут задания по умолчанию 120 секунд
+включает скачивание (SDK attempt 30 секунд, call 60), подготовку JVM и извлечение.
+При установке меньшего STUDYMATE_JOBS_EXECUTION_TIMEOUT_SECONDS возможен общий JOB_* timeout
+раньше PDF_TIMEOUT; параметры очереди фиксируются при enqueue.
+
+Окружение ребёнка очищено, JVM options из окружения не наследуются. Java 21
+[SecurityManager](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/SecurityManager.html)
+и отдельная policy разрешают только чтение PDF/runtime/JDK; запрещены сеть, exec, запись и
+чтение остальных файлов. Policy обязательна; переход с Java 21 требует замены механизма.
+SecurityManager устарел. Это защита Java-доступов, а не OS sandbox или предел RSS:
+для пилота нужны ограничения ОС/контейнера, обновляемый JDK 21 и проверка выбранного хостинга.
+Каталог задания приватный (Windows ACL / POSIX 0700), удаляется после работы. При гибели
+родителя ребёнок ограничен собственным watchdog 60 секунд; оставшиеся временные каталоги
+требуют штатной очистки ОС и ограничения диска. JDK/runtime не должны содержать секретов.
+
+stdout — бинарный протокол до 4 002 048 байт, stderr отбрасывается; PDF/текст/пути не логируются.
+Неподдерживаемые документы завершаются безопасным PDF_* кодом, оригинал и квота сохраняются.
+Сканы без текстового слоя, пустые PDF и зашифрованные файлы (включая пустой пароль) не обрабатываются;
+OCR отсутствует. В смешанном документе пустые страницы сохраняются с физическими номерами.
+Текст недоверенный, NUL/непарные суррогаты заменяются; форматирование и порядок колонок могут теряться.
+
+V8 не ставит прежние файлы в очередь и не меняет кэш upload. Явный process требует CSRF
+и UUID Idempotency-Key без тела/query; активный job даёт 409, ready не обрабатывается повторно.
+Повтор ключа возвращает прежнее задание, новая попытка после ошибки требует нового ключа.
+GET pages возвращает сохранённые страницы с пагинацией, без повторного скачивания/генерации.
+Результат записывается атомарно после проверки аренды и текущего материала. DELETE отменяет
+активный processing job и запрещает его позднюю запись; подтверждённая очистка каскадно удаляет страницы.
 
 ## Проверки
 
@@ -545,6 +600,48 @@ FormData upload/replay, rename, реальный lectureCount через get/upd
 job polling, удаление и нулевая квота. Backend использовал локальный S3 stub;
 исходники frontend не менялись. Это не браузерная UI-проверка.
 
-**Реальный R2, credentials/bucket policy/CORS, Linux/macOS, Docker и PDF-процессор этапа 9
+На момент завершения этапа 8 **реальный R2, credentials/bucket policy/CORS, Linux/macOS, Docker и PDF-процессор этапа 9
 не проверялись.** Для облачной интеграции выполнить описанный выше smoke после настройки
 уже существующего приватного бакета; реальные файлы студентов для smoke не нужны.
+
+Этап 9 (2026-09-29): **101 быстрый + 148 интеграционных = 249 тестов**, без ошибок
+и пропусков, `mvnw.cmd -Ppostgres-it verify` на Windows, JDK 21.0.6/PostgreSQL 17.2.
+Итоговый полный прогон выполнен на новой отдельной БД studymate_stage9_release_test.
+
+PdfProcessTest проверяет отдельную JVM на PDF с кириллицей, embedded/standard шрифтами,
+пустыми страницами, сканом, повреждённой структурой, шифрованием с пустым/непустым паролем,
+200/201 страницами, включительной границей 100 000 и превышением 1 000 000 символов.
+PdfIsolationTest использует ту же production policy и минимальный тестовый probe JAR:
+чтение постороннего файла, запись, сеть, exec, окружение и application classpath недоступны;
+проверены heap overflow, ограничение stdout, таймаут, прерывание и отсутствие живого ребёнка.
+PdfPackagedIT загружает парсер и ресурсы из обычного собранного Boot JAR и извлекает текст;
+проверяет, что test mains/fixtures не попали в артефакт, а worker содержит только свои классы.
+
+MaterialTextIT: реальный HTTP/PostgreSQL, владелец/CSRF, страницы и пустая пагинация,
+автоматический enqueue и неизменный upload replay, старый материал, process/retry/ключи,
+ошибки и сохранность оригинала/квоты, временный retry и исчерпание, атомарный rollback страниц,
+устаревшая аренда, одновременные completion/delete и каскад. PdfRestartIT аварийно завершает
+JVM во время GET оригинала; следующая восстанавливает job, скачивает через настоящий SDK,
+извлекает текст дочерним процессом и сохраняет страницы. Ещё один рестарт не повторяет готовую работу.
+
+R2ObjectStorageTest проверяет fetch по фактическому размеру/SHA-256 и обрывает избыточный поток.
+Сквозной smoke выявил прежнюю ошибку PUT с файловым InputStream без mark/reset:
+исправлено переоткрытие потока для подписи/отправки, все потоки закрываются, HTTP-повторов
+SDK по-прежнему нет. Тест использует настоящий файловый поток вместо ByteArrayInputStream.
+Старый тест задержки JobsIT сравнивает теперь часы PostgreSQL с PostgreSQL, устраняя
+нестабильность сравнения DB-времени и JVM-времени с разной точностью.
+
+Обычный JAR обновил прежнюю БД studymate_stage8_full_test V7→V8. Сверка агрегатов сохранила
+160 аккаунтов с хешами, 101 предмет, 88 ответов создания, 74 задания, 49 материалов,
+63 записи объектов с квотой/исходными ответами. Новых заданий/страниц миграция не создала.
+V1–V7 не изменены; health и приватность jobs проверены после обновления.
+
+Node smoke импортировал текущие frontend apiClient/authApi/subjectApi/jobApi/jobWatcher:
+реальные cookie/CSRF, FormData/upload/replay, успешный watcher, Material/pages, process/retry,
+удаление/нулевая квота через HTTP, локальный S3 SDK и дочерний PDF-процесс. Подтверждена
+необходимость расширить ERROR_CODES frontend jobApi девятью PDF_* кодами: сейчас failed/PDF_INVALID
+даёт INVALID_RESPONSE. Изменение передано в docs, frontend не переписан. Это не проверка UI.
+
+Реальный R2/bucket policy/CORS, Linux/macOS, Docker и изоляция средствами выбранного хостинга
+не проверялись. Java 21 policy/heap проверены локально; ограничения RSS/диска/CPU на хостинге
+нужно настроить отдельно. OCR и ИИ не подключены, платных запросов не было.

@@ -16,6 +16,29 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class R2ObjectStorageTest {
+  @Test void fetchChecksActualBytesHashAndStopsOversizedStream() throws Exception {
+    byte[] pdf=MaterialInputTest.PDF;
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    var calls=new AtomicInteger();
+    server.createContext("/",exchange -> {
+      calls.incrementAndGet(); exchange.sendResponseHeaders(200,pdf.length);
+      exchange.getResponseBody().write(pdf); exchange.close();
+    }); server.start();
+    try(var storage=new R2ObjectStorage("http://127.0.0.1:"+server.getAddress().getPort(),"private-bucket","test-only-key","test-only-secret");
+        var workspace=new com.studymate.materials.pdf.PdfWorkspace()) {
+      String sha=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(pdf));
+      storage.fetch("originals/test.pdf",workspace.input(),pdf.length,sha);
+      assertThat(java.nio.file.Files.readAllBytes(workspace.input())).isEqualTo(pdf);
+      assertThatThrownBy(() -> storage.fetch("originals/test.pdf",workspace.directory().resolve("hash.pdf"),pdf.length,"0".repeat(64)))
+          .isInstanceOf(ObjectIntegrityFailure.class).hasNoCause();
+      assertThatThrownBy(() -> storage.fetch("originals/test.pdf",workspace.directory().resolve("short.pdf"),pdf.length+1,sha))
+          .isInstanceOf(ObjectIntegrityFailure.class);
+      assertThatThrownBy(() -> storage.fetch("originals/test.pdf",workspace.directory().resolve("large.pdf"),pdf.length-1,sha))
+          .isInstanceOf(ObjectIntegrityFailure.class);
+      assertThat(java.nio.file.Files.size(workspace.directory().resolve("large.pdf"))).isLessThan(pdf.length);
+      assertThat(calls.get()).isEqualTo(4);
+    } finally { server.stop(0); }
+  }
   @Test void actualSdkUsesSignedNonChunkedPutChecksumPrivateDownloadAndIdempotentDelete() throws Exception {
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
     var calls=new AtomicInteger(); var failure=new AtomicReference<Throwable>();
@@ -39,13 +62,21 @@ class R2ObjectStorageTest {
       finally { exchange.close(); }
     });
     server.start();
-    try (var storage=new R2ObjectStorage("http://127.0.0.1:"+server.getAddress().getPort(),"private-bucket","test-only-key","test-only-secret")) {
-      var closed=new AtomicInteger();
-      storage.put("originals/test.pdf",pdf.length,HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(pdf)),() -> new ByteArrayInputStream(pdf) {
-        private boolean done;
-        @Override public void close() { if(!done) { done=true; closed.incrementAndGet(); } }
+    try (var storage=new R2ObjectStorage("http://127.0.0.1:"+server.getAddress().getPort(),"private-bucket","test-only-key","test-only-secret");
+        var workspace=new com.studymate.materials.pdf.PdfWorkspace()) {
+      java.nio.file.Files.write(workspace.input(),pdf);
+      var closed=new AtomicInteger(); var opened=new AtomicInteger();
+      storage.put("originals/test.pdf",pdf.length,HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(pdf)),() -> {
+        try {
+          var file=java.nio.file.Files.newInputStream(workspace.input());
+          assertThat(file.markSupported()).isFalse(); opened.incrementAndGet();
+          return new java.io.FilterInputStream(file) {
+            private boolean done;
+            @Override public void close() throws java.io.IOException { if(!done) { done=true; closed.incrementAndGet(); super.close(); } }
+          };
+        } catch(java.io.IOException error) { throw new java.io.UncheckedIOException(error); }
       });
-      assertThat(closed.get()).isEqualTo(2);
+      assertThat(opened.get()).isGreaterThanOrEqualTo(2); assertThat(closed.get()).isEqualTo(opened.get());
       var download=storage.download("originals/test.pdf");
       var query=URI.create(download.url()).getRawQuery();
       assertThat(query.contains("X-Amz-Expires=60") && query.contains("X-Amz-Signature=") && query.contains("response-content-disposition=")).isTrue();

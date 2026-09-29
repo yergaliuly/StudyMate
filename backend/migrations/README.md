@@ -46,7 +46,12 @@ Composite FK (subject_id, owner_id) → subjects(id, owner_id) — non-deferrabl
 cached response удаляется, quota освобождается. Технические ключи пока без срока истечения.
 Будущие учебные данные и история попыток должны иметь ON DELETE CASCADE к materials;
 сейчас их нет, каскад проверяется тестовой таблицей stage8_history_test.
-Применённые V1–V6 не меняются. Следующие миграции — начиная с `V8__description.sql`.
+V8 создаёт material_pages: физический page_number 1–200 и text_content, FK materials
+ON DELETE CASCADE. materials получает processing_job_id, page_count и text_characters.
+Ошибки jobs расширены стабильными PDF-кодами. Старые материалы получают NULL-ссылку
+на job, не ставятся в очередь миграцией; сохранённые ответы POST остаются исходными.
+Все страницы и статистика сохраняются только в транзакции завершения с действующей арендой.
+Применённые V1–V7 не меняются. Следующие миграции — начиная с `V9__description.sql`.
 Тестовая таблица `stage6_material_references_test` создаётся/удаляется только интеграционным
 тестом в отдельной тестовой БД и не входит в миграции приложения.
 В SQL указывать схему явно, например `studymate.users`, чтобы не зависеть от search_path.

@@ -9,6 +9,12 @@ import org.springframework.core.env.Environment;
 class R2Configuration {
   @Bean
   @ConditionalOnProperty(name = "studymate.r2.enabled", havingValue = "true")
+  MaterialTextHandler materialTextHandler(MaterialTextRepository repository, ObjectStorage storage,
+      com.studymate.materials.pdf.PdfProcess parser) {
+    return new MaterialTextHandler(repository, storage, parser);
+  }
+  @Bean
+  @ConditionalOnProperty(name = "studymate.r2.enabled", havingValue = "true")
   MaterialCleanupHandler materialCleanupHandler(MaterialRepository repository, ObjectStorage storage) {
     return new MaterialCleanupHandler(repository, storage);
   }
