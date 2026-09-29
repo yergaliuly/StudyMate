@@ -34,6 +34,7 @@ class RegistrationControllerTest {
       """;
   @Autowired MockMvc mvc;
   @MockitoBean RegistrationService registrations;
+  @MockitoBean com.studymate.materials.ObjectStorage storage;
 
   @Test
   void normalizesInputAndReturnsOnlyPublicUserFields() throws Exception {

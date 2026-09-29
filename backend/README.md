@@ -1,8 +1,8 @@
 # StudyMate backend
 
-Этап 7: добавлены очередь заданий PostgreSQL, аренда/heartbeat, ограниченные повторы,
-восстановление после остановки процесса и `GET /api/v1/jobs/{id}` для владельца.
-Реальных обработчиков пока нет; тестовая операция находится только в `src/test`.
+Этап 8: материалы, приватный R2, квоты 25 МиБ/PDF и 500 МиБ/аккаунт, загрузка с
+Idempotency-Key, скачивание и сохраняемая очистка `material.delete`. title необязателен.
+Этап 7 добавил очередь PostgreSQL, аренду/heartbeat, повторы и `GET /api/v1/jobs/{id}`.
 Этап 6 добавил `GET/PATCH/DELETE /api/v1/subjects/{id}`: чтение, редактирование
 с проверкой версии и удаление пустого предмета. Работают `GET /api/v1/subjects`
 (список, поиск, пагинация) и `POST /api/v1/subjects` (создание с Idempotency-Key), а также
@@ -12,7 +12,7 @@
 и сохранность сессии после перезапуска JAR. Frontend может подключать формы через authApi;
 проверка интерфейса с frontend-разработчиком остаётся отдельным шагом.
 Готовые apiClient/authApi/subjectApi проверены с настоящим сервером через HTTP.
-R2, материалы и квоты — следующий этап 8, автоматически не начинается.
+Извлечение текста PDF — следующий этап 9, автоматически не начинается.
 Технический `GET /actuator/health` работает. Контракт: [API](../docs/api.md),
 дальнейшие этапы: [архитектура](../docs/architecture.md).
 
@@ -28,6 +28,7 @@ R2, материалы и квоты — следующий этап 8, авто
 | Spring Security | 7.1.1, из BOM Spring Boot |
 | Spring Session JDBC | 4.1.1, из BOM Spring Boot |
 | Bouncy Castle | bcprov-jdk18on 1.86, закреплён явно для Argon2 |
+| AWS SDK Java | s3 и url-connection-client 2.55.7, закреплены явно |
 | PostgreSQL | Major-версия 17; локальная проверка на 17.2 |
 
 Версии проверены 2026-09-27 по [требованиям Spring Boot](https://docs.spring.io/spring-boot/system-requirements.html),
@@ -106,7 +107,10 @@ GET/POST `/subjects` требуют входа, POST также требует C
 Нет стандартного пользователя Spring, HTML-формы входа и Basic Auth.
 Cookie-аутентификация использует Spring Security и Spring Session JDBC.
 Подключение frontend — через один origin и Vite proxy (пример ниже); CORS не включён.
-Multipart отключён до согласования загрузки на этапе 8; R2 и ИИ пока не подключаются.
+Multipart включён только для загрузки материалов: PDF до 26 214 400 байт, весь запрос
+до 26 279 936 байт, максимум 3 части, порог записи во временный файл 0.
+Auth и CSRF проверяются до multipart; токен принимается только из заголовка.
+R2 выключен по умолчанию; без конфигурации upload возвращает 503 STORAGE_UNAVAILABLE.
 
 MVC, servlet error dispatch и Spring Security используют
 `{"error":{"code":"...","message":"...","fieldErrors":{}}}` и `Cache-Control: no-store`.
@@ -154,8 +158,9 @@ Email обрезается по правилам JS trim и приводится
 история — `public.flyway_schema_history`. V1 создаёт схему `studymate`, V2 — таблицу `users`,
 V3 — таблицы сессий, V4 — предметы и результаты создания с Idempotency-Key,
 V5 — версия предмета с начальным значением 1, включая существующие строки,
-V6 — сохраняемые задания с состояниями, арендами и ограничениями повторов.
-Применённые V1–V5 не менялись. Сохранённые ответы POST остаются прежними.
+V6 — сохраняемые задания с состояниями, арендами и ограничениями повторов,
+V7 — метаданные материалов, долговечный журнал объектов/резервов и FK предмета.
+Применённые V1–V6 не менялись. Сохранённые ответы POST остаются прежними.
 Схему сессий создаёт только Flyway.
 Правила: [migrations/README.md](migrations/README.md).
 
@@ -185,8 +190,8 @@ AuthenticationManager/ProviderManager, смену session id и CsrfAuthenticati
 [CSRF и обновление токена](https://docs.spring.io/spring-security/reference/servlet/exploits/csrf.html),
 [Spring Session JDBC](https://docs.spring.io/spring-session/reference/configuration/jdbc.html).
 
-Ветка для интеграции — `feat/backend-jobs`, база — `e12a63e0b27586675340e789a0dc6a33d3c8c737`
-(включает PR #19 с этапом 6 и PR #18 с frontend auth integration). После push конкретный SHA:
+Ветка для интеграции — `feat/backend-materials`, база — `8701611cf2a30223c4b73349286213422204dd3b`
+(включает PR #20 с jobs и PR #21 с frontend subjects integration). После push конкретный SHA:
 `git rev-parse HEAD`. Адрес backend: `http://127.0.0.1:8080`, путь API: `/api/v1`.
 
 В текущей Vite-конфигурации уже есть host `127.0.0.1` и proxy:
@@ -232,7 +237,7 @@ NUL и непарные суррогаты не допускаются. Икон
 цвета: blue/purple/indigo/green. Лишние поля владельца, id, дат и счётчиков дают 422.
 Название уникально внутри аккаунта без учёта регистра: конкурентный конфликт даёт
 `409 SUBJECT_TITLE_EXISTS` с fieldErrors.title. У разных аккаунтов названия могут совпадать.
-Пока материалов нет, lectureCount=0; progressPercent=null. Эти поля не хранятся в subjects.
+lectureCount вычисляется по stored-материалам; progressPercent=null. Поля не хранятся в subjects.
 
 Ключ действует для пользователя и операции POST /subjects. SHA-256 считается по
 нормализованным полям с фиксированным порядком; порядок полей JSON не влияет.
@@ -277,10 +282,9 @@ toSubjectView её отбрасывает). Перед редактирован�
 `DELETE /api/v1/subjects/{id}` требует сессию/CSRF, без тела, query, version и ключа.
 Пустой предмет: 204 без тела. Чужой/отсутствующий/уже удалённый: 404 SUBJECT_NOT_FOUND.
 Удаляется текущий пустой предмет независимо от версии его оформления.
-FK-ссылка, препятствующая удалению: 409 SUBJECT_NOT_EMPTY. На этапе 6 реальных материалов
-нет; механизм проверен на явно тестовой таблице ссылок, включая processing/deleting
-и гонки вставки/удаления. Этап 8 обязан создать non-deferrable FK materials.subject_id
-с ON DELETE RESTRICT и индексом и сохранять связь до завершения очистки.
+FK-ссылка, препятствующая удалению: 409 SUBJECT_NOT_EMPTY. V7 создаёт non-deferrable FK
+materials(subject_id, owner_id) с ON DELETE RESTRICT и индексом; связь сохраняется до
+завершения очистки. Она проверяет также принадлежность предмета владельцу материала.
 Клиентский lectureCount не используется как разрешение на удаление.
 Frontend убирает карточку после 204, при 409 оставляет, при 404 обновляет список.
 Повтор POST с прежним ключом после PATCH/DELETE возвращает исходные JSON/Location,
@@ -292,7 +296,8 @@ Frontend убирает карточку после 204, при 409 оставл
 приложением и держит не больше одного активного handler на процесс. Ожидающие задания
 находятся в PostgreSQL; два процесса выбирают разные готовые строки через SKIP LOCKED.
 Без зарегистрированных обработчиков worker не создаёт/не исполняет демонстрационные задания.
-Реальные JobHandler появятся с R2/PDF/ИИ; JobProcessMain используется только тестами.
+Этап 8 регистрирует material.delete при включённом R2. JobProcessMain и MaterialProcessMain
+используются только тестами и не попадают в production JAR.
 
 Внутренний `JobQueue.enqueue(owner, kind, operationKey, payload, policy)` присоединяется
 к транзакции вызывающего модуля. Payload — JSON-объект до 16 КиБ со ссылками, без файлов,
@@ -346,7 +351,71 @@ Backoff: min(maxDelay, delay × 2^(attemptCount−1)); при стандартн
 createdAt/updatedAt/nextAttemptAt/finishedAt/resultId/error. Payload, ключ и аренда скрыты.
 Failed-задание читается с HTTP 200, его ошибка находится в data.error (code/message).
 Полный DTO — [API](../docs/api.md). Публичных enqueue/cancel/retry endpoints пока нет.
-Frontend может подготовить чтение/состояния; пользовательский сценарий появится с материалами.
+Frontend получает jobId при DELETE материала и может опрашивать его состояние.
+
+## Материалы и приватный R2 (этап 8)
+
+Пользователь утвердил **26 214 400 байт/PDF**, **524 288 000 байт/аккаунт** и удаление
+истории попыток вместе с материалом. title необязателен; правила имени, полный Material,
+ошибки и FormData приведены в [api.md](../docs/api.md#материалы--реализованный-контракт-этапа-8).
+POST /materials возвращает **201** после подтверждения R2/БД, status=stored,
+processingStatus=not_started. PDF job не создаётся до этапа 9. DELETE возвращает **202**
+с materialId/jobId; текущий этап не создаёт конспекты, тесты или попытки.
+
+API: GET/POST /materials; GET/PATCH/DELETE /materials/{id}; GET /materials/{id}/download;
+GET /storage/usage. Все требуют сессию; изменения требуют CSRF, загрузка также UUID
+Idempotency-Key. PATCH: title + version, 409 MATERIAL_VERSION_CONFLICT при конфликте.
+Список имеет subjectId/q/page/pageSize. Подписанная ссылка на скачивание действует 60 секунд.
+
+Для реального подключения нужен **существующий приватный бакет R2** без публичного r2.dev
+или custom domain, доступные этому backend S3 credentials с Object Read & Write только
+для этого бакета и переменные ниже. Агент бакет/ключи не создавал и облачные вызовы не делал.
+Пустые значения — место для локального ввода, не рабочие секреты:
+
+```powershell
+$env:STUDYMATE_R2_ENABLED = 'true'
+$env:STUDYMATE_R2_ENDPOINT = 'https://<account-id>.r2.cloudflarestorage.com'
+$env:STUDYMATE_R2_BUCKET = '<private-bucket>'
+# Задать STUDYMATE_R2_ACCESS_KEY_ID и STUDYMATE_R2_SECRET_ACCESS_KEY
+# через секретные переменные IDE/терминала; не вставлять значения в Git или чат.
+$env:STUDYMATE_JOBS_ENABLED = 'true'
+$env:STUDYMATE_MATERIAL_MAINTENANCE_ENABLED = 'true'
+.\mvnw.cmd spring-boot:run
+```
+
+Остальные переменные PostgreSQL/JAVA_HOME/local/registration задаются по разделам выше.
+Никакого автоматического чтения .env нет. Без R2 настройки auth/subjects/list/usage работают,
+файловые операции возвращают 503; production fake отсутствует. Включённый R2 проверяет
+синтаксис endpoint/наличие настроек при старте, но не выполняет сетевую проверку credentials.
+Облачный smoke после настройки: загрузить небольшой искусственный PDF, скачать по ссылке,
+удалить, дождаться succeeded, проверить нулевую квоту и отсутствие объекта в бакете.
+Для встроенного удалённого preview потребуется отдельно настроить CORS бакета; обычная
+навигация по download URL и существующий локальный preview этого не требуют.
+
+SDK проверен по [официальному примеру R2 Java](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-java/),
+[таблице совместимости S3](https://developers.cloudflare.com/r2/api/s3/api/) и
+[настройке checksum AWS SDK](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/s3-checksums.html).
+Используется region auto, path style, chunked encoding выключен, Content-MD5;
+SHA-256 хранится для идентификации содержимого. PUT без автоматических повторов SDK,
+connect 5 с/socket 20 с/attempt 30 с/call 60 с. URL/SDK-секреты не логируются.
+
+Квота — used+reserved под блокировкой аккаунта в PostgreSQL. Неудачный PUT не освобождает
+резерв: материал deleting, ключ объекта и размер сохранены до подтверждённой очистки.
+Первый maintenance через 10 с, далее раз в минуту (до 20 просроченных загрузок); дедлайн
+загрузки 5 минут. При исчерпании попыток cleanup явный DELETE создаёт новый job; повтор
+активного возвращает прежний. Выключение worker/maintenance приостанавливает восстановление.
+После удаления metadata/FK предмета освобождаются, технический журнал ключей остаётся:
+поздний PUT убирается повторной очисткой tombstone (до одного за проход, раз в сутки на ключ).
+Это асинхронная сверка, а не распределённая транзакция. Журнал пока не имеет срока очистки.
+При переносе/смене бакета сначала нужно закончить или перенести все объекты и задания:
+настройка бакета одна на приложение, она не хранится отдельно для каждой записи.
+
+Временные multipart-файлы удаляются после запроса; каталог временных файлов сервера должен
+быть доступен только системному пользователю backend. После аварийной остановки ОС может
+оставить временные файлы: их штатная очистка и лимит диска нужны в настройке хостинга.
+Одновременно принимаются две загрузки на процесс, остальные получают 429/Retry-After: 2.
+Проверка PDF сейчас ограничена форматом/размером/header/EOF; полноценная структура,
+текстовый слой и изоляция дочернего PDF-процесса остаются этапом 9.
 
 ## Проверки
 
@@ -450,3 +519,32 @@ JOB_OUTCOME_UNKNOWN после первой попытки. Обычные HTTP-
 151 предмет с версиями и 155 сохранённых ответов создания. Таблица jobs после запуска
 пуста: worker не создаёт демонстрационные задания. Проверены health и 401 для гостя на GET jobs.
 Реальные R2/PDF/ИИ, Linux/macOS, Docker и UI-сценарий заданий не проверялись.
+
+Этап 8 (2026-09-29): **90 быстрых + 140 интеграционных = 230 тестов**, без ошибок
+и пропусков, Windows/JDK 21.0.6/PostgreSQL 17.2, `mvnw -Ppostgres-it verify`.
+На новой БД применены V1→V7. Проверены настоящий HTTP multipart/cookie/header CSRF,
+отсутствие доступа другого аккаунта, повтор/in-flight Idempotency-Key, необязательный title,
+граница 26 214 400 байт и chunked upload на байт больше, ошибочные поля/формат,
+две конкурентные загрузки и 429 третьей, конкурентный резерв последнего места аккаунта,
+rollback резервирования, счётчики/поиск/пагинация, version/conflict и запрет удаления предмета.
+
+R2ObjectStorageTest отправляет настоящий AWS SDK PUT/DELETE на локальный HttpServer,
+проверяет подпись/Content-MD5/длину/отсутствие chunking, presigned GET 60 с и redaction ошибок.
+MaterialsIT проверяет неопределённый PUT, сохранение резерва/ключа, повтор cleanup после
+исчерпания попыток, гонку upload/delete, поздний PUT и tombstone-аудит, атомарную очистку
+зависимой тестовой истории/квоты и откат при FK-ошибке. MaterialRestartIT
+запускает две JVM с реальным worker и SDK, принудительно завершает первую после удалённого
+DELETE до ответа и DB callback; вторая повторяет DELETE и очищает также просроченный резерв
+без локального файла. Тестовые adapters/main/fixtures не включены в production JAR.
+
+Обычный JAR обновил прежнюю тестовую БД V6→V7: сохранены байт-в-байт 283 аккаунта,
+152 предмета, 158 сохранённых ответов создания и 90 заданий (проверка хешей агрегатов);
+таблицы материалов пусты, демонстрационные данные не добавляются.
+Текущие frontend apiClient/authApi/subjectApi из main проверены через Node с cookie jar:
+FormData upload/replay, rename, реальный lectureCount через get/update, download,
+job polling, удаление и нулевая квота. Backend использовал локальный S3 stub;
+исходники frontend не менялись. Это не браузерная UI-проверка.
+
+**Реальный R2, credentials/bucket policy/CORS, Linux/macOS, Docker и PDF-процессор этапа 9
+не проверялись.** Для облачной интеграции выполнить описанный выше smoke после настройки
+уже существующего приватного бакета; реальные файлы студентов для smoke не нужны.
