@@ -1,0 +1,147 @@
+.account-materials {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+
+.account-materials .secondary-button {
+  gap: 8px;
+}
+
+.account-material-intro,
+.account-material-state,
+.account-material-card {
+  padding: 24px;
+  min-width: 0;
+}
+
+.account-material-intro {
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(135deg, #fff, #f4f3ff);
+}
+
+.account-material-intro h2,
+.account-material-card h3 {
+  overflow-wrap: anywhere;
+}
+
+.account-material-intro > p:last-child {
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.account-material-toolbar,
+.account-material-pagination,
+.account-material-pagination > div,
+.account-material-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.account-material-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 250px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--muted);
+}
+
+.account-material-search:focus-within {
+  outline: 3px solid #9185f7;
+  outline-offset: 2px;
+}
+
+.account-material-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.account-material-state {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.account-material-state > p:not(.form-error),
+.account-material-pagination p {
+  color: var(--muted);
+}
+
+.account-material-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-material-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.account-material-card-heading > svg {
+  color: var(--primary);
+}
+
+.account-material-status {
+  padding: 5px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  background: #eef0ff;
+  color: #4e5abe;
+}
+
+.account-material-status.status-uploading {
+  background: #fff4db;
+  color: #78520c;
+}
+
+.account-material-status.status-deleting {
+  background: #fff0f2;
+  color: #a33852;
+}
+
+.account-material-filename {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-material-size {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .account-material-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-material-intro,
+  .account-material-state,
+  .account-material-card {
+    padding: 20px;
+  }
+
+  .account-material-toolbar > button {
+    width: 100%;
+    justify-content: center;
+  }
+}

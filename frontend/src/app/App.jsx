@@ -58,6 +58,7 @@ export default function App() {
   // Черновик живёт только в памяти и возвращается только своему владельцу.
   const subjectDraftRef = useRef(null);
   const subjectDetailRef = useRef(null);
+  const materialsRef = useRef(null);
   const draftOwnerRef = useRef(null);
   const recoveringAccessRef = useRef(false);
 
@@ -65,6 +66,7 @@ export default function App() {
     if (user && draftOwnerRef.current !== user.id) {
       subjectDraftRef.current = null;
       subjectDetailRef.current = null;
+      materialsRef.current = null;
       draftOwnerRef.current = user.id;
       recoveringAccessRef.current = false;
     }
@@ -148,6 +150,7 @@ export default function App() {
     pendingIntentRef.current = 'logout';
     subjectDraftRef.current = null;
     subjectDetailRef.current = null;
+    materialsRef.current = null;
     draftOwnerRef.current = null;
     recoveringAccessRef.current = false;
     setAuthMessage('');
@@ -290,6 +293,7 @@ export default function App() {
               onOpenDemo={openDemo}
               draftRef={subjectDraftRef}
               detailRef={subjectDetailRef}
+              materialsRef={materialsRef}
               onAccessError={handleAccountAccessError}
               onAccessRestored={handleAccountAccessRestored}
             />

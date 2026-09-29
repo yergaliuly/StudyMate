@@ -22,7 +22,13 @@ function listErrorMessage(error) {
   return 'Не удалось загрузить предметы. Проверь соединение и попробуй снова.';
 }
 
-export default function AccountSubjects({ draftRef, detailRef, onAccessError, onAccessRestored }) {
+export default function AccountSubjects({
+  draftRef,
+  detailRef,
+  onAccessError,
+  onAccessRestored,
+  onOpenMaterials,
+}) {
   const [searchInput, setSearchInput] = useState('');
   const [request, setRequest] = useState({ q: '', page: 1, revision: 0, clamped: false });
   const [list, setList] = useState({ status: 'loading', key: '', subjects: [], meta: null });
@@ -283,6 +289,7 @@ export default function AccountSubjects({ draftRef, detailRef, onAccessError, on
         <AccountSubjectDetails
           key={selectedId}
           detailRef={detailRef}
+          onOpenMaterials={onOpenMaterials}
           onClose={closeDetails}
           onChanged={handleSubjectChanged}
           onAccessError={onAccessError}
