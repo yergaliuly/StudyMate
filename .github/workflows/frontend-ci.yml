@@ -57,6 +57,7 @@ jobs:
           tests/sessionFlow.test.js
           tests/subjectDraft.test.js
           tests/jobApi.test.js
+          tests/jobWatcher.test.js
 
       - name: Build frontend
         run: npm run build
