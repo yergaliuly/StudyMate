@@ -35,10 +35,18 @@ V6 добавляет `studymate.jobs`: владелец, тип/ключ опе
 Индексы обслуживают очередь готовых заданий, просроченные аренды и владельца.
 CHECK-ограничения согласуют состояние, аренду, finished_at и результат; FK не удаляет
 задания каскадно при удалении пользователя. Политика удаления аккаунтов — будущий этап.
-Применённые V1–V5 не меняются. Новые файлы — начиная с `V7__description.sql`.
-Материалов в production-схеме пока нет. Их будущая связь subject_id должна использовать
-non-deferrable FK ON DELETE RESTRICT и индекс. SubjectService переводит SQLSTATE 23503
-при DELETE в SUBJECT_NOT_EMPTY; состояние обработки/очистки не снимает связь.
+V7 создаёт material_objects (долговечный журнал ключей/квоты/загрузок) и materials
+(метаданные и версия). Уникальны owner/request_key и object_key; CHECK согласуют
+uploading/stored/deleting/deleted с reserved/used/released. Квота резервируется под
+блокировкой users строки, чтобы конкурирующие запросы считали общий used+reserved.
+Composite FK (subject_id, owner_id) → subjects(id, owner_id) — non-deferrable ON DELETE RESTRICT;
+индекс subject_id обязателен. SubjectService переводит SQLSTATE 23503 в SUBJECT_NOT_EMPTY.
+Метаданные и FK предмета удаляются только после R2 DELETE в fenced callback задания.
+Журнал material_objects остаётся для идемпотентности и повторной очистки поздних PUT;
+cached response удаляется, quota освобождается. Технические ключи пока без срока истечения.
+Будущие учебные данные и история попыток должны иметь ON DELETE CASCADE к materials;
+сейчас их нет, каскад проверяется тестовой таблицей stage8_history_test.
+Применённые V1–V6 не меняются. Следующие миграции — начиная с `V8__description.sql`.
 Тестовая таблица `stage6_material_references_test` создаётся/удаляется только интеграционным
 тестом в отдельной тестовой БД и не входит в миграции приложения.
 В SQL указывать схему явно, например `studymate.users`, чтобы не зависеть от search_path.

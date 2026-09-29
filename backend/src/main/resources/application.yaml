@@ -41,9 +41,21 @@ spring:
     log-request-details: false
   servlet:
     multipart:
-      enabled: false
+      enabled: true
+      resolve-lazily: true
+      max-file-size: 26214400B
+      max-request-size: 26279936B
+      file-size-threshold: 0B
 
 studymate:
+  r2:
+    enabled: ${STUDYMATE_R2_ENABLED:false}
+    endpoint: ${STUDYMATE_R2_ENDPOINT:}
+    bucket: ${STUDYMATE_R2_BUCKET:}
+    access-key-id: ${STUDYMATE_R2_ACCESS_KEY_ID:}
+    secret-access-key: ${STUDYMATE_R2_SECRET_ACCESS_KEY:}
+  materials:
+    maintenance-enabled: ${STUDYMATE_MATERIAL_MAINTENANCE_ENABLED:true}
   jobs:
     enabled: ${STUDYMATE_JOBS_ENABLED:true}
     poll-interval-ms: ${STUDYMATE_JOBS_POLL_INTERVAL_MS:1000}
@@ -57,6 +69,12 @@ studymate:
     enabled: ${STUDYMATE_REGISTRATION_ENABLED:false}
 
 server:
+  tomcat:
+    connection-timeout: 30s
+    max-part-count: 3
+    max-part-header-size: 2048B
+    max-parameter-count: 5
+    max-http-form-post-size: 65536B
   address: ${STUDYMATE_SERVER_ADDRESS:127.0.0.1}
   port: ${STUDYMATE_SERVER_PORT:8080}
   servlet:
@@ -96,3 +114,4 @@ logging:
     # Rollback failures can otherwise dump SQL/exception details. The outer session filter
     # records only the exception type and returns the same safe error envelope.
     org.springframework.transaction.support.TransactionTemplate: 'OFF'
+    software.amazon.awssdk: 'OFF'
