@@ -58,6 +58,8 @@ jobs:
           tests/subjectDraft.test.js
           tests/jobApi.test.js
           tests/jobWatcher.test.js
+          tests/storageApi.test.js
+          tests/materialApi.test.js
 
       - name: Build frontend
         run: npm run build
