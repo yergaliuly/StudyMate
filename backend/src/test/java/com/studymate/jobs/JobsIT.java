@@ -142,12 +142,14 @@ class JobsIT extends PostgresIntegrationTest {
     for (int attempt = 1; attempt <= 3; attempt++) {
       var lease = claim(kind);
       assertThat(lease.attemptCount()).isEqualTo(attempt);
-      Instant before = Instant.now();
+      // Scheduling uses the database clock; JVM/OS clocks can differ at sub-millisecond precision.
+      Instant before = jdbc.queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class).toInstant();
       assertThat(completion.finish(lease, new JobOutcome.Retry(JobError.JOB_TEMPORARY_FAILURE))).isTrue();
       var response = queue.get(owner, id);
       if (attempt < 3) {
         assertThat(response.status()).isEqualTo("queued");
-        assertThat(response.nextAttemptAt()).isBetween(before.plusSeconds(attempt == 1 ? 2 : 3), Instant.now().plusSeconds(attempt == 1 ? 2 : 3));
+        Instant after = jdbc.queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class).toInstant();
+        assertThat(response.nextAttemptAt()).isBetween(before.plusSeconds(attempt == 1 ? 2 : 3), after.plusSeconds(attempt == 1 ? 2 : 3));
         assertThat(jobs.claim(List.of(kind))).isEmpty();
         due(id);
       } else {

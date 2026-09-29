@@ -14,11 +14,14 @@ public class MaterialJobTestDriver {
     this.jobs=jobs; this.completion=completion; this.jdbc=jdbc;
   }
   public JobLease claim(UUID id) {
+    return claim(id,"material.delete");
+  }
+  public JobLease claim(UUID id,String kind) {
     jdbc.update("UPDATE studymate.jobs SET next_attempt_at=clock_timestamp()-INTERVAL '1 day' WHERE id=? AND status='queued'",id);
-    var lease=jobs.claim(List.of("material.delete")).orElseThrow();
+    var lease=jobs.claim(List.of(kind)).orElseThrow();
     assertThat(lease.id()).isEqualTo(id); return lease;
   }
   public boolean finish(JobLease lease,JobOutcome outcome) { return completion.finish(lease,outcome); }
-  public void run(UUID id, JobHandler handler) throws Exception { var lease=claim(id); assertThat(finish(lease,handler.execute(lease))).isTrue(); }
+  public void run(UUID id, JobHandler handler) throws Exception { var lease=claim(id,handler.kind()); assertThat(finish(lease,handler.execute(lease))).isTrue(); }
   public void recover() { jobs.recoverExpired(); }
 }

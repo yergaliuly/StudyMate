@@ -18,8 +18,14 @@
     <java.version>21</java.version>
     <bouncycastle.version>1.86</bouncycastle.version>
     <aws-sdk.version>2.55.7</aws-sdk.version>
+    <pdfbox.version>3.0.8</pdfbox.version>
   </properties>
   <dependencies>
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>${pdfbox.version}</version>
+    </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>s3</artifactId>
@@ -89,6 +95,31 @@
   </dependencies>
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.11.0</version>
+        <executions><execution><id>pdf-worker-libraries</id><phase>generate-resources</phase>
+          <goals><goal>copy-dependencies</goal></goals>
+          <configuration>
+            <includeArtifactIds>pdfbox,fontbox,pdfbox-io,commons-logging</includeArtifactIds>
+            <outputDirectory>${project.build.outputDirectory}/pdf-worker/lib</outputDirectory>
+            <stripVersion>true</stripVersion>
+          </configuration>
+        </execution></executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions><execution><id>isolated-pdf-worker</id><phase>process-classes</phase>
+          <goals><goal>jar</goal></goals>
+          <configuration>
+            <classifier>isolated</classifier><finalName>worker</finalName>
+            <outputDirectory>${project.build.outputDirectory}/pdf-worker</outputDirectory>
+            <includes><include>com/studymate/materials/pdf/worker/**</include></includes>
+          </configuration>
+        </execution></executions>
+      </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>

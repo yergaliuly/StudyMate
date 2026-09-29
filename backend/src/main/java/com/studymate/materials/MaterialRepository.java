@@ -5,6 +5,7 @@ import com.studymate.common.api.ApiResponse;
 import com.studymate.common.validation.TextInput;
 import com.studymate.jobs.JobQueue;
 import com.studymate.jobs.RetryPolicy;
+import com.studymate.jobs.JobError;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
@@ -78,6 +79,9 @@ class MaterialRepository {
         WHERE owner_id=:owner AND id=:id AND upload_expires_at > clock_timestamp()
         """).param("owner",owner).param("id",id).update();
     if (changed != 1) throw MaterialInput.error(HttpStatus.CONFLICT,"UPLOAD_ABORTED","Срок загрузки истёк.");
+    UUID processing=jobs.enqueue(owner,MaterialTextRepository.KIND,id,json.valueToTree(Map.of("materialId",id)),RetryPolicy.SAFE);
+    jdbc.sql("UPDATE studymate.materials SET processing_job_id=:job WHERE id=:id AND owner_id=:owner")
+        .param("job",processing).param("id",id).param("owner",owner).update();
     String body = json.writeValueAsString(new ApiResponse<>(get(owner,id)));
     jdbc.sql("UPDATE studymate.material_objects SET response_body=:body WHERE id=:id AND owner_id=:owner")
         .param("body",body).param("id",id).param("owner",owner).update();
@@ -95,8 +99,10 @@ class MaterialRepository {
 
   private static final String PROJECTION = """
       SELECT m.id, m.owner_id, m.subject_id, m.title, m.file_name, m.version, m.created_at,
-        greatest(m.updated_at,o.updated_at) AS updated_at, o.size_bytes, o.state, o.cleanup_job_id
+        greatest(m.updated_at,o.updated_at,j.updated_at) AS updated_at, o.size_bytes, o.state, o.cleanup_job_id,
+        m.processing_job_id,m.page_count,m.text_characters,j.status AS job_status,j.error_code
       FROM studymate.materials m JOIN studymate.material_objects o ON o.id=m.id AND o.owner_id=m.owner_id
+      LEFT JOIN studymate.jobs j ON j.id=m.processing_job_id AND j.owner_id=m.owner_id
       """;
   MaterialResponse get(UUID owner, UUID id) {
     return jdbc.sql(PROJECTION + " WHERE m.owner_id=:owner AND m.id=:id")
@@ -134,9 +140,16 @@ class MaterialRepository {
 
   @Transactional(timeout = 10)
   public Deletion delete(UUID owner, UUID id) {
+    // Completion locks the processing job before owner/object. Follow that order when revoking its lease.
+    UUID processing=processingJob(owner,id);
+    if(processing!=null) jdbc.sql("SELECT id FROM studymate.jobs WHERE owner_id=:owner AND id=:job FOR UPDATE")
+        .param("owner",owner).param("job",processing).query(UUID.class).single();
     lockOwner(owner);
     var object = object(owner,id,true);
     if (object.state().equals("deleted")) throw notFound();
+    if(!java.util.Objects.equals(processing,processingJob(owner,id)))
+      throw new ApiException(HttpStatus.CONFLICT,"REQUEST_IN_PROGRESS","Обработка только что изменилась. Повтори удаление.",Map.of(),1);
+    if(processing!=null) jobs.cancel(owner,processing);
     if (object.jobId() != null) {
       String status = jdbc.sql("SELECT status FROM studymate.jobs WHERE id=:id AND owner_id=:owner")
           .param("id",object.jobId()).param("owner",owner).query(String.class).single();
@@ -209,6 +222,10 @@ class MaterialRepository {
   private void lockOwner(UUID owner) {
     jdbc.sql("SELECT id FROM studymate.users WHERE id=:owner FOR UPDATE").param("owner",owner).query(UUID.class).single();
   }
+  private UUID processingJob(UUID owner,UUID id) {
+    return jdbc.sql("SELECT processing_job_id FROM studymate.materials WHERE owner_id=:owner AND id=:id")
+        .param("owner",owner).param("id",id).query((r,n) -> r.getObject(1,UUID.class)).optional().orElse(null);
+  }
   private void requireSubject(UUID owner, UUID id, boolean lock) {
     if (jdbc.sql("SELECT id FROM studymate.subjects WHERE owner_id=:owner AND id=:id" + (lock ? " FOR KEY SHARE" : ""))
         .param("owner",owner).param("id",id).query(UUID.class).optional().isEmpty())
@@ -216,8 +233,13 @@ class MaterialRepository {
   }
   static ApiException notFound() { return MaterialInput.error(HttpStatus.NOT_FOUND,"MATERIAL_NOT_FOUND","Материал не найден."); }
   private static MaterialResponse response(ResultSet r) throws SQLException {
+    String job=r.getString("job_status");
+    String processing=job==null ? "not_started" : job.equals("succeeded") ? "ready" : job;
+    JobError error="failed".equals(job) ? JobError.valueOf(r.getString("error_code")) : null;
     return new MaterialResponse(r.getObject("id",UUID.class),r.getObject("subject_id",UUID.class),r.getString("title"),
-        r.getString("file_name"),"application/pdf",r.getLong("size_bytes"),r.getString("state"),"not_started",
-        r.getLong("version"),r.getTimestamp("created_at").toInstant(),r.getTimestamp("updated_at").toInstant(),r.getObject("cleanup_job_id",UUID.class));
+        r.getString("file_name"),"application/pdf",r.getLong("size_bytes"),r.getString("state"),processing,
+        r.getLong("version"),r.getTimestamp("created_at").toInstant(),r.getTimestamp("updated_at").toInstant(),r.getObject("cleanup_job_id",UUID.class),
+        r.getObject("processing_job_id",UUID.class),r.getObject("page_count",Integer.class),r.getObject("text_characters",Integer.class),
+        error==null ? null : new MaterialResponse.ProcessingError(error.name(),error.message()));
   }
 }

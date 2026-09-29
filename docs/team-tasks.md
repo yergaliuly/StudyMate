@@ -20,33 +20,44 @@ Backend разрабатывается последовательно в одн�
 
 ## Текущее состояние и передача контракта
 
-Этапы 1–7 слиты через PR #6, #10, #12, #15, #17, #19, #20. Этап 8 реализован в
-feat/backend-materials от 8701611cf2a30223c4b73349286213422204dd3b. База включает
-frontend auth integration/proxy (PR #18) и subjects integration (PR #21).
-Во frontend уже есть version/update/remove в subjectApi и поддержка FormData в apiClient;
-исходники frontend backend-этап 8 не меняет. Общий UI-сценарий проверяется отдельно.
+Этапы 1–8 слиты через PR #6, #10, #12, #15, #17, #19, #20, #24. Этап 9 реализован в
+feat/backend-pdf-processing от main/4b55ed8. База включает frontend auth integration/proxy
+(PR #18), subjects integration (PR #21), jobApi и отменяемый watcher (PR #23).
+Во frontend есть version/update/remove в subjectApi и поддержка FormData в apiClient;
+исходники frontend backend-этап 9 не меняет. Общий UI-сценарий проверяется отдельно.
+После этой базы в main слит [PR #25](https://github.com/yergaliuly/StudyMate/pull/25)
+(merge `888d514`) с materialApi/storageApi под контракт этапа 8. Он ещё не включён
+в локальную базу backend-ветки. Проверка исходника `f84aa18` и точечный Node-прогон
+подставных ответов подтвердили расхождения с этапом 9, перечисленные ниже;
+это не проверка облачного R2 или интерфейса.
 
 Backend реализует аккаунт и cookie/CSRF, CRUD предметов, сохраняемые задания,
-материалы с приватным R2, квотой, скачиванием и повторяемой очисткой. Полный контракт
+материалы с приватным R2, квотой, скачиванием, повторяемой очисткой и извлечением текста PDF.
+Полный контракт
 материалов — [api.md](api.md), запуск — [backend/README.md](../backend/README.md).
 Адрес локального backend http://127.0.0.1:8080, API /api/v1, профиль local для HTTP.
 Регистрация закрыта по умолчанию; включается STUDYMATE_REGISTRATION_ENABLED=true.
 R2 также выключен по умолчанию; включение требует заранее созданного приватного бакета
 и переменных окружения. Реальная облачная проверка не выполнена; SDK проверяется
-локальным S3-сервером. Прошли 230 тестов, обновление V6→V7 и HTTP smoke текущих frontend
-адаптеров с FormData. Секреты в чат/PR не передавать, ресурсы автоматически не создавались.
+локальным S3-сервером. Результаты проверок каждого этапа приведены в backend/README.md.
+Секреты в чат/PR не передавать, ресурсы автоматически не создавались.
 
 Пользователь утвердил 25 МиБ на PDF (26 214 400 байт), 500 МиБ на аккаунт
 (524 288 000 байт), необязательное title и удаление истории попыток вместе с материалом.
 Название по умолчанию — имя файла без .pdf. Уточнение прежней предварительной карты:
 загрузка возвращает 201 с полным Material после сохранения оригинала; удаление — 202
-с materialId/jobId. Извлечение текста относится к этапу 9: processingStatus=not_started,
-никаких вымышленных результатов или фонового PDF job на этапе 8 нет.
+с materialId/jobId. Этап 9 добавляет автоматический processingJobId после upload, 200 страниц,
+100 000 UTF-16 символов/страницу, 1 000 000/PDF, 60 секунд в отдельной JVM с heap 256 МиБ.
+Ошибка обработки сохраняет оригинал. Старые материалы остаются not_started до явного process.
 
 Следующие задачи frontend:
 
-1. Добавить materialApi: список, upload FormData, getById, rename с version, download, remove;
-   storageApi.usage и jobApi.getById. DTO и ошибки сверить с новым разделом api.md.
+1. Адаптировать materialApi из PR #25 к этапу 9: кроме not_started принимать
+   queued/running/ready/failed/cancelled и сохранять processingJobId/pageCount/textCharacters/
+   processingError. Сейчас новые состояния отклоняются как INVALID_RESPONSE, новые поля теряются.
+   Добавить process/pages; список, upload FormData, getById, rename с version, download, remove
+   и storageApi.usage уже добавлены другом. DTO из 16 полей и ошибки сверить с api.md;
+   учитывать старый сохранённый ответ upload этапа 8 с 12 полями и перечитывать свежий GET.
 2. Подключить выбор/drag-and-drop PDF, не считать локальный preview облачным сохранением.
    Один Idempotency-Key на логическую загрузку, прежний ключ на сетевой повтор; title можно опустить.
 3. Отображать uploading/stored/deleting, reservedBytes и usedBytes. При успехе обновлять
@@ -58,6 +69,15 @@ R2 также выключен по умолчанию; включение тр�
    встроенного preview отдельно договориться о bucket CORS; локальный preview уже существует.
 6. Совместно проверить два аккаунта, границы размеров/квоты, повтор запроса, потерю ответа,
    ошибку R2, конфликт переименования и SUBJECT_NOT_EMPTY до конца очистки.
+7. После upload опрашивать processingJobId; по succeeded перечитать Material/pages.
+   Сначала расширить ERROR_CODES в frontend/src/services/jobApi.js девятью PDF_* кодами
+   из api.md и добавить тест failed/PDF_NO_TEXT: сейчас такой ответ даёт INVALID_RESPONSE.
+   ready — готов текст, не конспект. Null pageCount/textCharacters не показывать как ноль.
+   failed показывает processingError; not_started и failed/cancelled допускают явный process
+   с новым ключом. Сетевой повтор process сохраняет ключ; новые загрузки process не требуют.
+8. Отображать физические pageNumber, включая пустые страницы, и обычный текст без HTML.
+   PDF_NO_TEXT объяснять как отсутствие текста/OCR, PDF_ENCRYPTED — как необходимость копии
+   без шифрования. При failed оригинал доступен для скачивания и занимает прежнюю квоту.
 
 Согласие друга на общую архитектуру не подменяет передачу нового контракта материалов.
 После push пользователь передаёт SHA через git rev-parse HEAD. Демонстрационные данные
