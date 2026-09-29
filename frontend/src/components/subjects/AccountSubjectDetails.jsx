@@ -67,7 +67,12 @@ function ComparedValues({ title, values }) {
 }
 
 export default function AccountSubjectDetails({
-  detailRef, onClose, onChanged, onAccessError, onAccessRestored,
+  detailRef,
+  onClose,
+  onChanged,
+  onAccessError,
+  onAccessRestored,
+  onOpenMaterials,
 }) {
   const recordRef = useRef(detailRef.current);
   const record = recordRef.current;
@@ -340,7 +345,14 @@ export default function AccountSubjectDetails({
             <div><dt>Цвет</dt><dd>{colors[state.subject.tone]}</dd></div>
             <div><dt>Лекции</dt><dd>{state.subject.lectures}</dd></div>
           </dl>
-          <p className="subject-form-note">Материалы и загрузка лекций появятся позже.</p>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={Boolean(busy || state.readFailed)}
+            onClick={() => onOpenMaterials(state.subject.id)}
+          >
+            Материалы предмета
+          </button>
           <div className="subject-detail-actions">
             <button type="button" className="secondary-button" disabled={Boolean(busy || state.readFailed)} onClick={() => enter('edit')}><Pencil size={16} aria-hidden="true" />Редактировать предмет</button>
             <button type="button" className="secondary-button subject-detail-delete-link" disabled={Boolean(busy || state.readFailed)} onClick={() => enter('delete')}><Trash2 size={16} aria-hidden="true" />Удалить предмет</button>

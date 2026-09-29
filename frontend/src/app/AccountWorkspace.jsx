@@ -5,6 +5,7 @@ import Header from '../components/layout/Header.jsx';
 import Sidebar from '../components/layout/Sidebar.jsx';
 import AccountSubjects from '../components/subjects/AccountSubjects.jsx';
 import '../styles/account.css';
+import AccountMaterials from '../components/materials/AccountMaterials.jsx';
 
 const pageTitles = {
   dashboard: 'Мой кабинет',
@@ -34,10 +35,17 @@ export default function AccountWorkspace({
   message = '',
   draftRef,
   detailRef,
+  materialsRef,
   onAccessError,
   onAccessRestored,
 }) {
-  const [activePage, setActivePage] = useState('dashboard');
+  const [materialSubjectId, setMaterialSubjectId] = useState(
+  () => materialsRef.current?.selectedSubjectId ?? null,
+);
+
+  const [activePage, setActivePage] = useState(
+  () => materialSubjectId ? 'subjects' : 'dashboard',
+);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const headingRef = useRef(null);
   const initials = getInitials(user.displayName);
@@ -50,12 +58,45 @@ export default function AccountWorkspace({
   useEffect(() => {
     window.scrollTo(0, 0);
     headingRef.current?.focus({ preventScroll: true });
-  }, [activePage]);
+}, [activePage, materialSubjectId]);
 
   function handleNavigate(page) {
-    setActivePage(page);
-    closeMenu();
+  if (materialsRef.current) {
+    materialsRef.current.selectedSubjectId = null;
   }
+
+  setMaterialSubjectId(null);
+  setActivePage(page);
+  closeMenu();
+}
+
+function openMaterials(id) {
+  const subjectId = id.toLowerCase();
+
+  if (!materialsRef.current) {
+    materialsRef.current = {
+      selectedSubjectId: null,
+      records: {},
+    };
+  }
+
+  const scope = materialsRef.current;
+
+  if (!scope.records[subjectId]) {
+    scope.records[subjectId] = {
+      search: '',
+      q: '',
+      page: 1,
+    };
+  }
+
+  scope.selectedSubjectId = subjectId;
+  detailRef.current = null;
+
+  setMaterialSubjectId(subjectId);
+  setActivePage('subjects');
+  closeMenu();
+}
 
   return (
     <div className="account-workspace">
@@ -109,7 +150,7 @@ export default function AccountWorkspace({
             <p className="eyebrow">ЛИЧНОЕ УЧЕБНОЕ ПРОСТРАНСТВО</p>
 
             <h1 ref={headingRef} tabIndex={-1}>
-              {pageTitles[activePage]}
+              {materialSubjectId ? 'Материалы предмета' : pageTitles[activePage]}
             </h1>
 
             <div className="account-identity">
@@ -124,10 +165,20 @@ export default function AccountWorkspace({
             </div>
           </section>
 
-          {showSubjects ? (
+          {materialSubjectId ? (
+            <AccountMaterials
+              key={materialSubjectId}
+              subjectId={materialSubjectId}
+              stateRef={materialsRef}
+              onBack={() => handleNavigate('subjects')}
+              onAccessError={onAccessError}
+              onAccessRestored={onAccessRestored}
+            />
+          ) : showSubjects ? (
             <AccountSubjects
               draftRef={draftRef}
               detailRef={detailRef}
+              onOpenMaterials={openMaterials}
               onAccessError={onAccessError}
               onAccessRestored={onAccessRestored}
             />

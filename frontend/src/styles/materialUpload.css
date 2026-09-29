@@ -1,0 +1,123 @@
+.material-upload {
+  padding: 24px;
+  min-width: 0;
+}
+
+.material-upload-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.material-upload-heading > svg {
+  color: var(--primary);
+}
+
+.material-upload-heading p,
+.material-upload-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.material-upload form,
+.material-upload-field,
+.material-upload-restart {
+  display: grid;
+  gap: 12px;
+}
+
+.material-upload form {
+  gap: 18px;
+}
+
+.material-upload-field > label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.material-upload-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+.material-upload-field input:disabled {
+  background: #f4f5fb;
+  color: var(--muted);
+}
+
+.material-upload-field input[aria-invalid="true"] {
+  border-color: #c34c69;
+}
+
+.material-upload-field input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #eef0ff;
+  color: #4e5abe;
+  font: inherit;
+  cursor: pointer;
+}
+
+.material-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.material-upload-notice {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #edf8f2;
+  color: #216742;
+}
+
+.material-upload-warning,
+.material-upload-restart {
+  padding: 14px;
+  border: 1px solid #eadfae;
+  border-radius: 12px;
+  background: #fffbef;
+  color: #70531d;
+  font-size: 13px;
+}
+
+.material-upload-restart {
+  justify-items: start;
+}
+
+.material-upload-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.material-upload-confirm input {
+  margin-top: 4px;
+  accent-color: var(--primary);
+}
+
+.material-upload p,
+.material-upload label {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .material-upload {
+    padding: 20px;
+  }
+
+  .material-upload-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}
