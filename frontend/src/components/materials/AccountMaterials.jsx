@@ -7,6 +7,7 @@ import { storageApi } from '../../services/storageApi.js';
 import { formatBytes } from '../../utils/formatBytes.js';
 import StorageUsage from './StorageUsage.jsx';
 import MaterialUploadForm from './MaterialUploadForm.jsx';
+import MaterialTextPanel, { processingLabels } from './MaterialTextPanel.jsx';
 import '../../styles/accountMaterials.css';
 
 const PAGE_SIZE = 20;
@@ -26,6 +27,11 @@ export default function AccountMaterials({
 }) {
   const scope = useRef(stateRef.current).current;
   const record = useRef(scope.records[subjectId]).current;
+  const [selectedMaterialId, setSelectedMaterialId] = useState(
+  record.selectedMaterialId ?? null,
+  );
+  const materialOpenerRef = useRef(null);
+  const materialSearchRef = useRef(null);
 
   const runtime = useRef({
     mounted: false,
@@ -69,6 +75,11 @@ export default function AccountMaterials({
       && scope.selectedSubjectId === subjectId
       && scope.records[subjectId] === record,
     [runtime, stateRef, scope, subjectId, record],
+  );
+
+  const canUseMaterial = useCallback(
+  (id) => canUseMaterials() && record.selectedMaterialId === id,
+  [canUseMaterials, record],
   );
 
   useEffect(() => {
@@ -345,6 +356,36 @@ export default function AccountMaterials({
     }
   }
 
+  function openMaterial(id, button) {
+  if (!canUseMaterials()) return;
+
+  materialOpenerRef.current = button;
+  record.selectedMaterialId = id;
+  setSelectedMaterialId(id);
+}
+
+function closeMaterial() {
+  if (!canUseMaterials()) return;
+
+  record.selectedMaterialId = null;
+  setSelectedMaterialId(null);
+
+  window.requestAnimationFrame(() => {
+    if (!canUseMaterials() || record.selectedMaterialId != null) return;
+
+    const button = materialOpenerRef.current;
+    if (button?.isConnected) button.focus();
+    else materialSearchRef.current?.focus();
+  });
+}
+
+  function handleMaterialUploaded(uploaded) {
+  if (!canUseMaterials()) return;
+
+  openMaterial(uploaded.id, null);
+  refreshMaterials();
+}
+
   const totalPages = ready
     ? Math.max(1, Math.ceil(list.data.meta.total / list.data.meta.pageSize))
     : 1;
@@ -391,6 +432,19 @@ export default function AccountMaterials({
             <p>{subject.data.description || 'Описание пока не добавлено.'}</p>
           </div>
 
+          {selectedMaterialId && (
+          <MaterialTextPanel
+            key={selectedMaterialId}
+            materialId={selectedMaterialId}
+            subjectId={subjectId}
+            record={record}
+            canAct={canUseMaterial}
+            onClose={closeMaterial}
+            onAccessError={(error) => blockUpload('checking', error)}
+            onMaterialRead={refreshList}
+          />
+        )}
+
           <StorageUsage
             status={storage.status}
             usage={storage.data ?? null}
@@ -404,7 +458,7 @@ export default function AccountMaterials({
             canAct={canUseMaterials}
             reviewStatus={reviewStatus}
             onStart={resetReview}
-            onUploaded={refreshMaterials}
+            onUploaded={handleMaterialUploaded}
             onReview={refreshMaterials}
             onAccessError={(error) => blockUpload('checking', error)}
             onUnavailable={() => blockUpload('unavailable')}
@@ -416,6 +470,7 @@ export default function AccountMaterials({
               <span className="visually-hidden">Поиск материалов</span>
 
               <input
+                ref={materialSearchRef}
                 type="search"
                 maxLength={160}
                 value={search}
@@ -496,6 +551,20 @@ export default function AccountMaterials({
                     <p className="account-material-size">
                       PDF · {formatBytes(material.sizeBytes)}
                     </p>
+                    <p className="account-material-processing">
+                      {processingLabels[material.processingStatus]}
+                    </p>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={material.status !== 'stored'}
+                      aria-expanded={selectedMaterialId === material.id}
+                      aria-label={'Открыть обработку и текст «' + material.title + '»'}
+                      onClick={(event) => openMaterial(material.id, event.currentTarget)}
+                    >
+                      Обработка и текст
+                    </button>
                   </li>
                 ))}
               </ul>

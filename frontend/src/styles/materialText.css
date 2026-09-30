@@ -1,0 +1,110 @@
+.material-text-panel {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  padding: 24px;
+  background: linear-gradient(145deg, #fff, #f7f8ff);
+}
+
+.material-text-heading,
+.material-text-actions,
+.material-text-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.material-text-heading h3:focus-visible {
+  outline: 3px solid #9185f7;
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+
+.material-text-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.material-text-processing {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.material-text-hint,
+.material-text-pagination p,
+.account-material-processing {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.account-material-processing {
+  font-size: 13px;
+}
+
+.account-material-card > button {
+  justify-self: start;
+}
+
+.material-text-content,
+.material-text-state,
+.material-text-pages {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.material-text-state {
+  justify-items: start;
+}
+
+.material-text-pages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.material-text-page {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.material-text-page pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .material-text-panel {
+    padding: 20px;
+  }
+
+  .material-text-page {
+    padding: 16px;
+  }
+
+  .material-text-actions {
+    width: 100%;
+  }
+
+  .material-text-actions button,
+  .material-text-pagination button {
+    flex: 1 1 150px;
+    justify-content: center;
+  }
+
+  .material-text-pagination p {
+    flex: 1 1 100%;
+    order: -1;
+  }
+}

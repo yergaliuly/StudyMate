@@ -58,6 +58,8 @@ jobs:
           tests/subjectDraft.test.js
           tests/jobApi.test.js
           tests/jobWatcher.test.js
+          tests/materialTextReader.test.js
+          tests/materialProcessingAction.test.js
           tests/storageApi.test.js
           tests/materialApi.test.js
           tests/materialUploadDraft.test.js
