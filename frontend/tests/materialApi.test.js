@@ -26,6 +26,10 @@ function material(changes = {}) {
     createdAt: TIME,
     updatedAt: TIME,
     deletionJobId: null,
+    processingJobId: null,
+    pageCount: null,
+    textCharacters: null,
+    processingError: null,
     ...changes,
   };
 }
@@ -112,10 +116,23 @@ const operations = [
     write: false,
     call: (api, signal) => api.getDownload(ID, { signal }),
   },
-  {
+    {
     name: 'remove',
     write: true,
     call: (api, signal) => api.remove(ID, { signal }),
+  },
+  {
+    name: 'process',
+    write: true,
+    call: (api, signal) => api.process(ID, {
+      idempotencyKey: KEY,
+      signal,
+    }),
+  },
+  {
+    name: 'pages',
+    write: false,
+    call: (api, signal) => api.pages(ID, { signal }),
   },
 ];
 
@@ -725,5 +742,516 @@ test('Все методы передают signal, отмена текущего
     );
     assert.equal(calls.length, 1, operation.name);
     assert.equal(calls[0].options.signal, controller.signal);
+  }
+});
+
+function processed(changes = {}) {
+  return material({
+    processingStatus: 'queued',
+    processingJobId: JOB_ID,
+    ...changes,
+  });
+}
+
+test('Все состояния обработки и готовый текст при удалении сохраняются', async () => {
+  for (const data of [
+    material(),
+    processed(),
+    processed({ processingStatus: 'running' }),
+    processed({
+      processingStatus: 'ready',
+      pageCount: 3,
+      textCharacters: 250,
+    }),
+    processed({
+      processingStatus: 'failed',
+      processingError: {
+        code: 'PDF_NO_TEXT',
+        message: 'В PDF нет текста.',
+      },
+    }),
+    processed({ processingStatus: 'cancelled' }),
+    processed({
+      status: 'deleting',
+      deletionJobId: OTHER_ID,
+      processingStatus: 'ready',
+      pageCount: 3,
+      textCharacters: 250,
+    }),
+  ]) {
+    const { api } = setup(json({ data }));
+
+    assert.deepEqual(await api.getById(ID), data);
+  }
+});
+
+test('Ошибка обработки сохраняет только безопасные публичные поля', async () => {
+  for (const code of [
+    'JOB_TEMPORARY_FAILURE',
+    'JOB_PROCESSING_FAILED',
+    'JOB_ATTEMPTS_EXHAUSTED',
+    'JOB_LEASE_EXPIRED',
+    'JOB_OUTCOME_UNKNOWN',
+    'PDF_INVALID',
+    'PDF_ENCRYPTED',
+    'PDF_NO_TEXT',
+    'PDF_TOO_MANY_PAGES',
+    'PDF_TEXT_LIMIT',
+    'PDF_TIMEOUT',
+    'PDF_RESOURCE_LIMIT',
+    'PDF_WORKER_FAILED',
+    'PDF_ORIGINAL_MISMATCH',
+  ]) {
+    const data = processed({
+      processingStatus: 'failed',
+      processingError: {
+        code,
+        message: 'Ошибка обработки.',
+      },
+    });
+
+    const { api } = setup(json({
+      data: {
+        ...data,
+        processingError: {
+          ...data.processingError,
+          objectKey: 'private',
+        },
+      },
+    }));
+
+    assert.deepEqual(await api.getById(ID), data);
+  }
+});
+
+test('Некорректные новые поля материала отклоняются', async () => {
+  for (const data of [
+    processed({ processingStatus: 'unknown' }),
+    processed({ processingJobId: null }),
+    processed({ processingJobId: 'bad' }),
+    material({ processingJobId: JOB_ID }),
+    processed({ processingStatus: 'ready' }),
+    processed({ pageCount: 1 }),
+    processed({ pageCount: 0, textCharacters: 0 }),
+    processed({ pageCount: 201, textCharacters: 1 }),
+    processed({ pageCount: 1.5, textCharacters: 1 }),
+    processed({ pageCount: 1, textCharacters: 100001 }),
+    processed({ pageCount: 20, textCharacters: 1000001 }),
+    processed({ pageCount: '1', textCharacters: 1 }),
+    processed({
+      processingError: {
+        code: 'PDF_INVALID',
+        message: 'Ошибка',
+      },
+    }),
+    processed({
+      processingStatus: 'failed',
+      processingError: null,
+    }),
+    processed({
+      processingStatus: 'failed',
+      processingError: {
+        code: 'PDF_UNKNOWN',
+        message: 'Ошибка',
+      },
+    }),
+    processed({
+      processingStatus: 'failed',
+      processingError: {
+        code: 'PDF_INVALID',
+        message: '',
+      },
+    }),
+  ]) {
+    const { api } = setup(json({ data }));
+
+    await assert.rejects(
+      () => api.getById(ID),
+      errorIs('INVALID_RESPONSE', 200),
+    );
+  }
+});
+
+test('Старый ответ upload допустим, но не подменяет современный GET/list/PATCH', async () => {
+  const legacy = material();
+
+  for (const key of [
+    'processingJobId',
+    'pageCount',
+    'textCharacters',
+    'processingError',
+  ]) {
+    delete legacy[key];
+  }
+
+  const write = await setupWrite(json({ data: legacy }, 201));
+
+  assert.deepEqual(
+    await write.api.upload(
+      { file: file(), subjectId: SUBJECT_ID },
+      { idempotencyKey: KEY },
+    ),
+    legacy,
+  );
+  assert.equal(write.calls.length, 1);
+
+  const read = setup(json({ data: legacy }));
+
+  await assert.rejects(
+    () => read.api.getById(ID),
+    errorIs('INVALID_RESPONSE', 200),
+  );
+
+  const list = setup(json({
+    data: [legacy],
+    meta: { page: 1, pageSize: 20, total: 1 },
+  }));
+
+  await assert.rejects(
+    () => list.api.list(),
+    errorIs('INVALID_RESPONSE', 200),
+  );
+
+  const patch = await setupWrite(json({
+    data: { ...legacy, version: 2 },
+  }));
+
+  await assert.rejects(
+    () => patch.api.rename(
+      ID,
+      { title: 'Лекция' },
+      { version: 1 },
+    ),
+    errorIs('INVALID_RESPONSE', 200),
+  );
+});
+
+test('Частично потерянные новые поля не считаются старым ответом', async () => {
+  for (const field of [
+    'processingJobId',
+    'pageCount',
+    'textCharacters',
+    'processingError',
+  ]) {
+    const data = material();
+    delete data[field];
+
+    const { api } = await setupWrite(json({ data }, 201));
+
+    await assert.rejects(
+      () => api.upload(
+        { file: file(), subjectId: SUBJECT_ID },
+        { idempotencyKey: KEY },
+      ),
+      errorIs('INVALID_RESPONSE', 201),
+    );
+  }
+});
+
+test('Новая загрузка возвращает queued и jobId без дополнительного process', async () => {
+  const data = processed();
+  const { api, calls } = await setupWrite(json({ data }, 201));
+
+  assert.deepEqual(
+    await api.upload(
+      { file: file(), subjectId: SUBJECT_ID },
+      { idempotencyKey: KEY },
+    ),
+    data,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('process отправляет один POST с CSRF и прежним ключом, без тела', async () => {
+  const data = { materialId: ID, jobId: JOB_ID };
+
+  const { api, calls } = await setupWrite(json({
+    data: { ...data, internal: 'hidden' },
+  }, 202));
+
+  const controller = new AbortController();
+
+  assert.deepEqual(
+    await api.process(ID.toUpperCase(), {
+      idempotencyKey: KEY,
+      signal: controller.signal,
+    }),
+    data,
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    '/api/v1/materials/' + ID.toUpperCase() + '/process',
+  );
+
+  const { options } = calls[0];
+
+  assert.equal(options.method, 'POST');
+  assert.equal(options.body, undefined);
+  assert.equal(options.headers.has('Content-Type'), false);
+  assert.equal(options.headers.get('X-CSRF-TOKEN'), 'test-csrf');
+  assert.equal(options.headers.get('Idempotency-Key'), KEY);
+  assert.equal(options.signal, controller.signal);
+});
+
+test('Неверные UUID, ключ и пагинация отклоняются до запроса', async () => {
+  const { api, calls } = setup();
+
+  for (const id of [undefined, null, '', 'bad', ID + '?x=1']) {
+    await assert.rejects(
+      () => api.process(id, { idempotencyKey: KEY }),
+      TypeError,
+    );
+    await assert.rejects(() => api.pages(id), TypeError);
+  }
+
+  for (const idempotencyKey of [undefined, null, '', 'bad']) {
+    await assert.rejects(
+      () => api.process(ID, { idempotencyKey }),
+      TypeError,
+    );
+  }
+
+  for (const options of [
+    { page: 0 },
+    { page: 1.5 },
+    { page: '1' },
+    { page: Number.MAX_SAFE_INTEGER + 1 },
+    { pageSize: 0 },
+    { pageSize: 101 },
+    { pageSize: '20' },
+  ]) {
+    await assert.rejects(
+      () => api.pages(ID, options),
+      RangeError,
+    );
+  }
+
+  assert.equal(calls.length, 0);
+});
+
+test('process отклоняет неверный успешный ответ', async () => {
+  for (const response of [
+    json({ data: { materialId: ID, jobId: JOB_ID } }, 200),
+    json({ data: { materialId: OTHER_ID, jobId: JOB_ID } }, 202),
+    json({ data: { materialId: ID, jobId: null } }, 202),
+    new Response(null, { status: 204 }),
+  ]) {
+    const { api, calls } = await setupWrite(response);
+
+    await assert.rejects(
+      () => api.process(ID, { idempotencyKey: KEY }),
+      errorIs('INVALID_RESPONSE'),
+    );
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('pages сохраняет пустые страницы, Unicode и разметку как обычный текст', async () => {
+  const data = [
+    {
+      pageNumber: 1,
+      text: '  Лекция\nКазахский: әіңғүұқөһ 😀\n<script>alert(1)</script>',
+    },
+    { pageNumber: 2, text: '' },
+  ];
+  const meta = { page: 1, pageSize: 20, total: 2 };
+
+  const { api, calls } = setup(json({
+    data: data.map((page) => ({ ...page, internal: 'hidden' })),
+    meta,
+  }));
+
+  const controller = new AbortController();
+
+  assert.deepEqual(
+    await api.pages(ID, { signal: controller.signal }),
+    { pages: data, meta },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    '/api/v1/materials/' + ID + '/pages?page=1&pageSize=20',
+  );
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.body, undefined);
+  assert.equal(calls[0].options.headers.has('X-CSRF-TOKEN'), false);
+  assert.equal(calls[0].options.signal, controller.signal);
+});
+
+test('Номер API-страницы отличается от физических номеров PDF', async () => {
+  const data = [{ pageNumber: 3, text: 'Третья' }];
+  const meta = { page: 2, pageSize: 2, total: 3 };
+  const { api } = setup(json({ data, meta }));
+
+  assert.deepEqual(
+    await api.pages(ID, { page: 2, pageSize: 2 }),
+    { pages: data, meta },
+  );
+});
+
+test('За концом pages сохраняется total, даже при максимальном page', async () => {
+  const meta = {
+    page: Number.MAX_SAFE_INTEGER,
+    pageSize: 100,
+    total: 3,
+  };
+
+  const { api } = setup(json({ data: [], meta }));
+
+  assert.deepEqual(
+    await api.pages(ID, { page: meta.page, pageSize: 100 }),
+    { pages: [], meta },
+  );
+});
+
+test('pages отклоняет повреждённые данные, метаданные и нарушенный порядок', async () => {
+  const meta = { page: 1, pageSize: 20, total: 2 };
+  const valid = [
+    { pageNumber: 1, text: 'Текст' },
+    { pageNumber: 2, text: '' },
+  ];
+
+  for (const payload of [
+    { data: valid, meta: null },
+    { data: valid, meta: { ...meta, page: 2 } },
+    { data: valid, meta: { ...meta, pageSize: 10 } },
+    { data: [], meta: { ...meta, total: 0 } },
+    { data: [], meta: { ...meta, total: 201 } },
+    { data: valid, meta: { ...meta, total: '2' } },
+    { data: [], meta },
+    { data: valid.slice(0, 1), meta },
+    { data: valid.slice().reverse(), meta },
+    { data: [valid[0], valid[0]], meta },
+    {
+      data: [{ pageNumber: 1, text: null }, valid[1]],
+      meta,
+    },
+    {
+      data: [{ pageNumber: 1, text: 'x'.repeat(100001) }, valid[1]],
+      meta,
+    },
+    {
+      data: [{ pageNumber: 1, text: '\u0000' }, valid[1]],
+      meta,
+    },
+    {
+      data: [{ pageNumber: 1, text: '\ud800' }, valid[1]],
+      meta,
+    },
+    {
+      data: [{ pageNumber: 1, text: 'Текст' }],
+      meta: { page: 2, pageSize: 20, total: 1 },
+    },
+  ]) {
+    const { api } = setup(json(payload));
+
+    const requestedPage = payload.meta?.page === 2
+      && payload.meta.total === 1
+      ? 2
+      : 1;
+
+    await assert.rejects(
+      () => api.pages(ID, { page: requestedPage }),
+      errorIs('INVALID_RESPONSE', 200),
+    );
+  }
+});
+
+test('Границы текста и числа страниц допустимы', async () => {
+  const data = Array.from({ length: 100 }, (_, index) => ({
+    pageNumber: index + 1,
+    text: index < 10 ? 'я'.repeat(100000) : '',
+  }));
+
+  const meta = { page: 1, pageSize: 100, total: 200 };
+  const { api } = setup(json({ data, meta }));
+
+  assert.deepEqual(
+    await api.pages(ID, { pageSize: 100 }),
+    { pages: data, meta },
+  );
+
+  const bad = setup(json({
+    data: data.map((page, index) =>
+      index === 10 ? { ...page, text: 'я' } : page),
+    meta,
+  }));
+
+  await assert.rejects(
+    () => bad.api.pages(ID, { pageSize: 100 }),
+    errorIs('INVALID_RESPONSE', 200),
+  );
+});
+
+test('Ошибки process и pages сохраняются без повторов и новых заданий', async () => {
+  for (const [name, status, code] of [
+    ['process', 401, 'AUTHENTICATION_REQUIRED'],
+    ['process', 403, 'CSRF_INVALID'],
+    ['process', 404, 'MATERIAL_NOT_FOUND'],
+    ['process', 409, 'MATERIAL_NOT_AVAILABLE'],
+    ['process', 409, 'PROCESSING_IN_PROGRESS'],
+    ['process', 409, 'TEXT_ALREADY_EXTRACTED'],
+    ['process', 409, 'IDEMPOTENCY_KEY_REUSED'],
+    ['process', 503, 'STORAGE_UNAVAILABLE'],
+    ['pages', 409, 'TEXT_NOT_READY'],
+    ['pages', 409, 'MATERIAL_NOT_AVAILABLE'],
+    ['pages', 401, 'AUTHENTICATION_REQUIRED'],
+    ['pages', 404, 'MATERIAL_NOT_FOUND'],
+    ['pages', 503, 'SERVICE_UNAVAILABLE'],
+  ]) {
+    const response = json({
+      error: {
+        code,
+        message: 'Ошибка.',
+        fieldErrors: {},
+      },
+    }, status, { 'Retry-After': '2' });
+
+    const { api, calls } = name === 'process'
+      ? await setupWrite(response)
+      : setup(response);
+
+    await assert.rejects(
+      () => name === 'process'
+        ? api.process(ID, { idempotencyKey: KEY })
+        : api.pages(ID),
+      (error) => {
+        errorIs(code, status)(error);
+        assert.equal(error.retryAfterSeconds, 2);
+        return true;
+      },
+    );
+
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('После потери ответа process повторяется явно с прежним ключом', async () => {
+  const data = { materialId: ID, jobId: JOB_ID };
+
+  const { api, calls } = await setupWrite(
+    () => {
+      throw new TypeError('Сеть');
+    },
+    json({ data }, 202),
+  );
+
+  await assert.rejects(
+    () => api.process(ID, { idempotencyKey: KEY }),
+    errorIs('NETWORK_ERROR'),
+  );
+  assert.equal(calls.length, 1);
+
+  assert.deepEqual(
+    await api.process(ID, { idempotencyKey: KEY }),
+    data,
+  );
+  assert.equal(calls.length, 2);
+
+  for (const { options } of calls) {
+    assert.equal(options.headers.get('Idempotency-Key'), KEY);
   }
 });

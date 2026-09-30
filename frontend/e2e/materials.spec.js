@@ -56,6 +56,10 @@ function material(number, subjectId = SUBJECT.id, overrides = {}) {
     createdAt: '2026-09-28T12:00:00Z',
     updatedAt: '2026-09-28T12:00:00Z',
     deletionJobId: null,
+    processingJobId: null,
+    pageCount: null,
+    textCharacters: null,
+    processingError: null,
     ...overrides,
   };
 }

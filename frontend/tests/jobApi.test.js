@@ -261,3 +261,42 @@ test('Отмена во время GET прекращает чтение без 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.method, 'GET');
 });
+
+test('Все девять ошибок PDF возвращаются как failed, а не INVALID_RESPONSE', async () => {
+  for (const code of [
+    'PDF_INVALID',
+    'PDF_ENCRYPTED',
+    'PDF_NO_TEXT',
+    'PDF_TOO_MANY_PAGES',
+    'PDF_TEXT_LIMIT',
+    'PDF_TIMEOUT',
+    'PDF_RESOURCE_LIMIT',
+    'PDF_WORKER_FAILED',
+    'PDF_ORIGINAL_MISMATCH',
+  ]) {
+    const data = job('failed', {
+      type: 'material.extract_text',
+      error: { code, message: 'Не удалось обработать PDF.' },
+    });
+    const { api, calls } = setup(json({ data }));
+
+    assert.deepEqual(await api.getById(ID), data);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.method, 'GET');
+  }
+});
+
+test('Неизвестный PDF-код отклоняется без повторного запроса', async () => {
+  const { api, calls } = setup(json({
+    data: job('failed', {
+      type: 'material.extract_text',
+      error: { code: 'PDF_UNKNOWN', message: 'Неизвестная ошибка.' },
+    }),
+  }));
+
+  await assert.rejects(
+    () => api.getById(ID),
+    errorIs('INVALID_RESPONSE', 200),
+  );
+  assert.equal(calls.length, 1);
+});
