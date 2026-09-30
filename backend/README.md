@@ -1,5 +1,6 @@
 # StudyMate backend
 
+Этап 10: явная генерация конспекта через OpenAI, версии, редактирование и сохранение в PostgreSQL.
 Этап 9: извлечение текста PDF в отдельной JVM, сохраняемые страницы, состояния и повтор обработки.
 Этап 8: материалы, приватный R2, квоты 25 МиБ/PDF и 500 МиБ/аккаунт, загрузка с
 Idempotency-Key, скачивание и сохраняемая очистка `material.delete`. title необязателен.
@@ -14,7 +15,7 @@ Idempotency-Key, скачивание и сохраняемая очистка `
 проверка интерфейса с frontend-разработчиком остаётся отдельным шагом.
 Готовые apiClient/authApi/subjectApi проверены с настоящим сервером через HTTP.
 Новые загрузки автоматически получают PDF job; старые запускаются явным POST process.
-ИИ/конспекты относятся к следующему этапу 10, автоматически он не начинается.
+Конспект запускается отдельным POST после готовности PDF-текста, не при загрузке материала.
 Технический `GET /actuator/health` работает. Контракт: [API](../docs/api.md),
 дальнейшие этапы: [архитектура](../docs/architecture.md).
 
@@ -193,9 +194,9 @@ AuthenticationManager/ProviderManager, смену session id и CsrfAuthenticati
 [CSRF и обновление токена](https://docs.spring.io/spring-security/reference/servlet/exploits/csrf.html),
 [Spring Session JDBC](https://docs.spring.io/spring-session/reference/configuration/jdbc.html).
 
-Ветка для интеграции — `feat/backend-pdf-processing`, база — `4b55ed8`
-(включает PR #24 с материалами и PR #23 с frontend job tracking). После push конкретный SHA:
-`git rev-parse HEAD`. Адрес backend: `http://127.0.0.1:8080`, путь API: `/api/v1`.
+Текущий checkout — `main`; этап 10 пока не зафиксирован в Git. После будущего push
+конкретный SHA можно получить через `git rev-parse HEAD`.
+Адрес backend: `http://127.0.0.1:8080`, путь API: `/api/v1`.
 
 В текущей Vite-конфигурации уже есть host `127.0.0.1` и proxy:
 
@@ -356,6 +357,31 @@ Failed-задание читается с HTTP 200, его ошибка нахо
 Полный DTO — [API](../docs/api.md). Публичных enqueue/cancel/retry endpoints модуля jobs нет.
 Материалы выдают jobId при DELETE/process и processingJobId после upload.
 
+## Конспект и OpenAI (этап 10)
+
+Провайдер по умолчанию отключён. Для локальной проверки с уже созданным проектным API-ключом
+и ограничением расходов OpenAI задай в **том же окне PowerShell**, где запускаешь backend:
+
+```powershell
+$env:STUDYMATE_AI_PROVIDER = 'openai'
+$taskOpenAiKey = Read-Host 'Введи OpenAI API key' -AsSecureString
+$env:STUDYMATE_OPENAI_API_KEY = [System.Net.NetworkCredential]::new('', $taskOpenAiKey).Password
+$taskOpenAiKey.Dispose()
+Remove-Variable taskOpenAiKey
+```
+
+Ключ не записывай в `.env`, репозиторий, чат или frontend. `STUDYMATE_AI_PROVIDER=fake`
+работает только с `SPRING_PROFILES_ACTIVE=local` и создаёт явно помеченный демонстрационный
+конспект без сети. `disabled` возвращает 503 AI_UNAVAILABLE при POST. Запуск приложения
+сам по себе не вызывает OpenAI; стоимость возникает только после явного POST summary.
+Сначала загрузи PDF и дождись `processingStatus=ready`, затем POST summary с UUID
+Idempotency-Key. Ответ даёт jobId для `GET /jobs/{id}`; результат читается через GET summary,
+редактируется PATCH с version. Подробные тела/ошибки — [api.md](../docs/api.md#конспект-этап-10).
+Длинные PDF обрабатываются частями без пропуска страниц. Job MANUAL не повторяет
+неопределённый платный вызов; для новой попытки после failed нужен новый явный POST и ключ.
+При ручной правке машинные ссылки на страницы очищаются. Реальные документы передаются
+OpenAI только после предупреждения в UI; точность тезисов требует проверки пользователем.
+
 ## Материалы и приватный R2 (этап 8)
 
 Пользователь утвердил **26 214 400 байт/PDF**, **524 288 000 байт/аккаунт** и удаление
@@ -363,7 +389,7 @@ Failed-задание читается с HTTP 200, его ошибка нахо
 ошибки и FormData приведены в [api.md](../docs/api.md#материалы--реализованный-контракт-этапа-8).
 POST /materials возвращает **201** после подтверждения R2/БД, status=stored,
 processingStatus=queued и processingJobId (добавлены этапом 9). DELETE возвращает **202**
-с materialId/jobId; текущий этап не создаёт конспекты, тесты или попытки.
+с materialId/jobId; вместе с материалом удаляет версии конспекта. Тесты/попытки ещё не создаются.
 
 API: GET/POST /materials; GET/PATCH/DELETE /materials/{id}; GET /materials/{id}/download;
 GET /storage/usage. Все требуют сессию; изменения требуют CSRF, загрузка также UUID
@@ -422,7 +448,7 @@ connect 5 с/socket 20 с/attempt 30 с/call 60 с. URL/SDK-секреты не 
 
 ## PDF и страницы текста (этап 9)
 
-Ветка `feat/backend-pdf-processing`, база `main`/`4b55ed8` после merge этапа 8 (PR #24).
+Этап 9 уже присутствует в текущем `main`.
 Работают POST /materials/{id}/process и GET /materials/{id}/pages; полный контракт,
 16 полей Material и ошибки — в [api.md](../docs/api.md#извлечение-текста-pdf--этап-9).
 PDFBox 3.0.8 закреплён по [официальным релизам](https://pdfbox.apache.org/download).
@@ -639,9 +665,12 @@ V1–V7 не изменены; health и приватность jobs прове�
 Node smoke импортировал текущие frontend apiClient/authApi/subjectApi/jobApi/jobWatcher:
 реальные cookie/CSRF, FormData/upload/replay, успешный watcher, Material/pages, process/retry,
 удаление/нулевая квота через HTTP, локальный S3 SDK и дочерний PDF-процесс. Подтверждена
-необходимость расширить ERROR_CODES frontend jobApi девятью PDF_* кодами: сейчас failed/PDF_INVALID
-даёт INVALID_RESPONSE. Изменение передано в docs, frontend не переписан. Это не проверка UI.
+необходимость расширить ERROR_CODES frontend jobApi девятью PDF_* кодами; они уже есть в
+текущем frontend. Этап 10 требует добавить AI_* и проверить UI отдельно.
 
 Реальный R2/bucket policy/CORS, Linux/macOS, Docker и изоляция средствами выбранного хостинга
 не проверялись. Java 21 policy/heap проверены локально; ограничения RSS/диска/CPU на хостинге
-нужно настроить отдельно. OCR и ИИ не подключены, платных запросов не было.
+нужно настроить отдельно. OCR не подключён. Этап 10 добавляет OpenAI-адаптер;
+автоматические тесты используют локальный HTTP stub/подставной провайдер без платных запросов.
+Пользователь сообщил об успешном отдельном пробном вызове OpenAI; сквозной вызов из backend
+с реальным документом и совместная проверка UI ещё не проводились.

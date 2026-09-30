@@ -48,6 +48,8 @@ spring:
       file-size-threshold: 0B
 
 studymate:
+  ai:
+    provider: ${STUDYMATE_AI_PROVIDER:disabled}
   r2:
     enabled: ${STUDYMATE_R2_ENABLED:false}
     endpoint: ${STUDYMATE_R2_ENDPOINT:}
