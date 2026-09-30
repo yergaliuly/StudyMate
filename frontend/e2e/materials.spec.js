@@ -935,3 +935,888 @@ test('Поздний ответ после выхода не возвращае�
 
   expect(state.writes).toEqual(['POST /auth/logout']);
 });
+
+// Проверки обработки PDF: только HTTP-mocks, без настоящего backend/R2.
+const PROCESS_JOB_1 = '84971941-cc75-4e13-9e67-000000000001';
+const PROCESS_JOB_2 = '84971941-cc75-4e13-9e67-000000000002';
+const PROCESS_UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+const PDF_TEXT_PAGES = [
+  'Первая строка\n<img src=x onerror="window.pdfTextExecuted=true">',
+  '',
+  'Текст третьей страницы.',
+  'Текст четвёртой страницы.',
+  'Текст пятой страницы.',
+  'Последняя, шестая страница.',
+].map((text, index) => ({ pageNumber: index + 1, text }));
+
+const PROCESS_TEST_FILE = {
+  name: 'processing-test.pdf',
+  mimeType: 'application/pdf',
+  buffer: Buffer.from('%PDF-1.7\nBrowser test fixture, not a real PDF.\n%%EOF\n'),
+};
+
+function processingFile(number = 1, status = 'ready', overrides = {}) {
+  return material(number, SUBJECT.id, {
+    processingStatus: status,
+    processingJobId: status === 'not_started' ? null : PROCESS_JOB_1,
+    pageCount: status === 'ready' ? PDF_TEXT_PAGES.length : null,
+    textCharacters: status === 'ready'
+      ? PDF_TEXT_PAGES.reduce((sum, page) => sum + page.text.length, 0)
+      : null,
+    processingError: status === 'failed'
+      ? { code: 'PDF_TIMEOUT', message: 'Служебные подробности обработки.' }
+      : null,
+    ...overrides,
+  });
+}
+
+function processingJob(id, status, materialId = material(1).id) {
+  const terminal = ['succeeded', 'failed', 'cancelled'].includes(status);
+
+  return {
+    id,
+    type: 'material.extract_text',
+    status,
+    attemptCount: status === 'queued' ? 0 : 1,
+    maxAttempts: 3,
+    createdAt: '2026-09-30T12:00:00Z',
+    updatedAt: '2026-09-30T12:00:01Z',
+    nextAttemptAt: status === 'queued' ? '2026-09-30T12:00:01Z' : null,
+    finishedAt: terminal ? '2026-09-30T12:00:01Z' : null,
+    resultId: status === 'succeeded' ? materialId : null,
+    error: status === 'failed'
+      ? { code: 'PDF_TIMEOUT', message: 'Обработка превысила время.' }
+      : null,
+  };
+}
+
+function processingPanel(page) {
+  return page.getByRole('region', {
+    name: 'Текст материала',
+    exact: true,
+  });
+}
+
+function uploadPanel(page) {
+  return page.getByRole('region', {
+    name: 'Загрузить PDF',
+    exact: true,
+  });
+}
+
+function processingReply(route, data, status = 200) {
+  return route.fulfill({ status, json: { data } });
+}
+
+function acceptProcessing(route, id, jobId = PROCESS_JOB_1) {
+  return processingReply(route, { materialId: id, jobId }, 202);
+}
+
+async function mockProcessing(page, options = {}) {
+  const state = await mockMaterials(page, {
+    files: [processingFile(1, 'not_started')],
+    materialGets: [],
+    textGets: [],
+    jobGets: [],
+    starts: [],
+    uploads: [],
+    onMaterial: null,
+    onText: null,
+    onJob: null,
+    onProcess: null,
+    onUpload: null,
+    ...options,
+  });
+
+  // Этот маршрут установлен позже базового и обрабатывает новые endpoints.
+  // Остальные запросы передаёт существующему mockMaterials.
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname.slice('/api/v1'.length);
+    const method = request.method();
+    const match = /^\/materials\/([^/]+)(?:\/(pages|process))?$/.exec(path);
+
+    if (method === 'GET' && match && !match[2]) {
+      const id = match[1];
+      state.materialGets.push(id);
+
+      if (state.onMaterial) {
+        await state.onMaterial(route, id);
+      } else {
+        const item = state.files.find((value) => value.id === id);
+
+        if (item) await processingReply(route, item);
+        else await fail(route, 404, 'MATERIAL_NOT_FOUND');
+      }
+      return;
+    }
+
+    if (method === 'GET' && match?.[2] === 'pages') {
+      const id = match[1];
+      const params = url.searchParams;
+      state.textGets.push({ id, ...Object.fromEntries(params) });
+
+      if (state.onText) {
+        await state.onText(route, id);
+      } else {
+        const size = Number(params.get('pageSize'));
+        const offset = (Number(params.get('page')) - 1) * size;
+
+        await listResponse(
+          route,
+          PDF_TEXT_PAGES.slice(offset, offset + size),
+          PDF_TEXT_PAGES.length,
+        );
+      }
+      return;
+    }
+
+    if (method === 'GET' && path.startsWith('/jobs/')) {
+      const id = path.slice('/jobs/'.length);
+      state.jobGets.push(id);
+
+      if (state.onJob) {
+        await state.onJob(route, id);
+      } else {
+        state.unexpected.push(method + ' ' + path);
+        await fail(route, 500, 'UNEXPECTED_TEST_REQUEST');
+      }
+      return;
+    }
+
+    if (method === 'POST' && match?.[2] === 'process') {
+      state.writes.push(method + ' ' + path);
+      state.starts.push({
+        id: match[1],
+        key: request.headers()['idempotency-key'],
+        headers: request.headers(),
+        body: request.postData(),
+      });
+
+      if (state.onProcess) {
+        await state.onProcess(route, match[1]);
+      } else {
+        state.unexpected.push(method + ' ' + path);
+        await fail(route, 500, 'UNEXPECTED_TEST_REQUEST');
+      }
+      return;
+    }
+
+    if (method === 'POST' && path === '/materials') {
+      state.writes.push(method + ' ' + path);
+      state.uploads.push({
+        key: request.headers()['idempotency-key'],
+        headers: request.headers(),
+        body: request.postData(),
+      });
+
+      if (state.onUpload) {
+        await state.onUpload(route);
+      } else {
+        state.unexpected.push(method + ' ' + path);
+        await fail(route, 500, 'UNEXPECTED_TEST_REQUEST');
+      }
+      return;
+    }
+
+    await route.fallback();
+  });
+
+  return state;
+}
+
+async function openProcessing(page, item = material(1)) {
+  await materials(page).getByRole('button', {
+    name: 'Открыть обработку и текст «' + item.title + '»',
+    exact: true,
+  }).click();
+
+  await expect(processingPanel(page)).toBeVisible();
+}
+
+async function closeProcessing(page) {
+  await processingPanel(page).getByRole('button', {
+    name: 'Закрыть текст',
+    exact: true,
+  }).click();
+
+  await expect(processingPanel(page)).toHaveCount(0);
+}
+
+async function expectFirstTextPage(page) {
+  await expect(processingPanel(page).getByRole('heading', {
+    name: 'Страница PDF 1',
+    exact: true,
+  })).toBeVisible();
+}
+
+async function uploadProcessingFile(page) {
+  await uploadPanel(page).getByLabel('PDF-файл', { exact: true })
+    .setInputFiles(PROCESS_TEST_FILE);
+
+  await uploadPanel(page).getByRole('button', {
+    name: 'Загрузить PDF',
+    exact: true,
+  }).click();
+}
+
+test('Текст: свежий GET, пустая страница, безопасный вывод и пагинация', async ({ page }) => {
+  const state = await mockProcessing(page);
+  state.onMaterial = (route) => processingReply(route, processingFile());
+
+  await openMaterials(page);
+  await openProcessing(page);
+  await expectFirstTextPage(page);
+
+  const panel = processingPanel(page);
+
+  await expect(panel.locator('.material-text-page')).toHaveCount(5);
+  expect(await panel.locator('pre').first().textContent())
+    .toBe(PDF_TEXT_PAGES[0].text);
+
+  await expect(panel.getByText(
+    'На этой странице нет извлечённого текста.',
+    { exact: true },
+  )).toBeVisible();
+
+  await expect(panel.locator('img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.pdfTextExecuted)).toBeUndefined();
+
+  await panel.getByRole('button', {
+    name: 'Вперёд по тексту',
+    exact: true,
+  }).click();
+
+  await expect(panel.getByRole('heading', {
+    name: 'Страница PDF 6',
+    exact: true,
+  })).toBeVisible();
+
+  await expect(panel.locator('.material-text-page')).toHaveCount(1);
+
+  await expect(panel.getByRole('button', {
+    name: 'Вперёд по тексту',
+    exact: true,
+  })).toBeDisabled();
+
+  await panel.getByRole('button', {
+    name: 'Назад по тексту',
+    exact: true,
+  }).click();
+
+  await expectFirstTextPage(page);
+
+  expect(state.textGets.map((value) => value.page)).toEqual(['1', '2', '1']);
+  expect(state.textGets.every((value) => value.pageSize === '5')).toBe(true);
+  expect(state.writes).toEqual([]);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(390);
+});
+
+test('Текст: выполнение задания завершается свежим GET и чтением страниц', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'queued')],
+  });
+
+  state.onJob = async (route, id) => {
+    if (state.jobGets.length === 1) {
+      await processingReply(route, processingJob(id, 'running'));
+    } else {
+      state.files = [processingFile()];
+      await processingReply(route, processingJob(id, 'succeeded'));
+    }
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await expect(processingPanel(page).getByText(
+    'Извлекаем текст',
+    { exact: true },
+  )).toBeVisible();
+
+  await page.clock.runFor(2100);
+  await expectFirstTextPage(page);
+
+  expect(state.materialGets).toHaveLength(2);
+  expect(state.jobGets).toEqual([PROCESS_JOB_1, PROCESS_JOB_1]);
+
+  await page.clock.runFor(6000);
+
+  expect(state.jobGets).toHaveLength(2);
+  expect(state.writes).toEqual([]);
+});
+
+test('Текст: закрытие панели останавливает опрос, открытие читает материал заново', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'queued')],
+  });
+
+  state.onJob = (route, id) =>
+    processingReply(route, processingJob(id, 'running'));
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await expect(processingPanel(page).getByText(
+    'Извлекаем текст',
+    { exact: true },
+  )).toBeVisible();
+
+  await closeProcessing(page);
+  await page.clock.runFor(6000);
+
+  expect(state.jobGets).toHaveLength(1);
+  await expect(processingPanel(page)).toHaveCount(0);
+
+  await openProcessing(page);
+  await expect.poll(() => state.jobGets.length).toBe(2);
+
+  expect(state.materialGets).toHaveLength(2);
+
+  await closeProcessing(page);
+  expect(state.writes).toEqual([]);
+});
+
+test('Текст: ошибка опроса ждёт ручного обновления материала', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'queued')],
+  });
+
+  state.onJob = async (route, id) => {
+    if (state.jobGets.length === 1) {
+      await fail(route, 503, 'SERVICE_UNAVAILABLE');
+    } else {
+      state.files = [processingFile()];
+      await processingReply(route, processingJob(id, 'succeeded'));
+    }
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await expect(processingPanel(page))
+    .toContainText('Проверка состояния остановлена');
+
+  await page.clock.runFor(5000);
+  expect(state.jobGets).toHaveLength(1);
+
+  await processingPanel(page).getByRole('button', {
+    name: 'Обновить материал',
+    exact: true,
+  }).click();
+
+  await expectFirstTextPage(page);
+
+  expect(state.jobGets).toHaveLength(2);
+  expect(state.writes).toEqual([]);
+});
+
+test('Загрузка PDF автоматически открывает текст и наблюдает уже созданное задание', async ({ page }) => {
+  const state = await mockProcessing(page, { files: [] });
+
+  const fileFields = {
+    fileName: PROCESS_TEST_FILE.name,
+    sizeBytes: PROCESS_TEST_FILE.buffer.length,
+  };
+
+  state.onUpload = async (route) => {
+    state.files = [processingFile(1, 'queued', fileFields)];
+    state.usage = {
+      ...USAGE,
+      usedBytes: USAGE.usedBytes + PROCESS_TEST_FILE.buffer.length,
+    };
+
+    await processingReply(route, state.files[0], 201);
+  };
+
+  state.onJob = async (route, id) => {
+    state.files = [processingFile(1, 'ready', fileFields)];
+    await processingReply(route, processingJob(id, 'succeeded'));
+  };
+
+  await openMaterials(page);
+  await uploadProcessingFile(page);
+  await expectFirstTextPage(page);
+
+  await expect(quota(page).getByRole('meter')).toHaveAttribute(
+    'aria-valuenow',
+    String(USAGE.usedBytes + USAGE.reservedBytes + PROCESS_TEST_FILE.buffer.length),
+  );
+
+  expect(state.uploads).toHaveLength(1);
+  expect(state.uploads[0].key).toMatch(PROCESS_UUID);
+  expect(state.uploads[0].headers['x-csrf-token'])
+    .toBe('materials-csrf-' + state.csrfCount);
+  expect(state.uploads[0].headers['content-type'])
+    .toContain('multipart/form-data');
+  expect(state.uploads[0].body).toContain('name="subjectId"');
+  expect(state.uploads[0].body).toContain(SUBJECT.id);
+
+  expect(state.jobGets).toEqual([PROCESS_JOB_1]);
+  expect(state.starts).toHaveLength(0);
+  expect(state.usageGets).toBeGreaterThanOrEqual(2);
+  expect(state.writes).toEqual(['POST /materials']);
+});
+
+test('Повтор загрузки сохраняет ключ и наблюдает актуальное задание из GET', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockProcessing(page, { files: [] });
+
+  const fileFields = {
+    fileName: PROCESS_TEST_FILE.name,
+    sizeBytes: PROCESS_TEST_FILE.buffer.length,
+  };
+
+  state.onUpload = async (route) => {
+    state.files = [processingFile(1, 'queued', {
+      ...fileFields,
+      processingJobId: PROCESS_JOB_2,
+    })];
+
+    if (state.uploads.length === 1) {
+      await route.abort('failed');
+    } else {
+      await processingReply(
+        route,
+        processingFile(1, 'queued', fileFields),
+        201,
+      );
+    }
+  };
+
+  state.onJob = (route, id) =>
+    processingReply(route, processingJob(id, 'running'));
+
+  await openMaterials(page);
+  await uploadProcessingFile(page);
+
+  const retry = uploadPanel(page).getByRole('button', {
+    name: 'Повторить загрузку',
+    exact: true,
+  });
+
+  await expect(retry).toBeEnabled();
+  await page.clock.runFor(3000);
+
+  expect(state.uploads).toHaveLength(1);
+
+  await retry.click();
+
+  await expect(processingPanel(page).getByText(
+    'Извлекаем текст',
+    { exact: true },
+  )).toBeVisible();
+
+  expect(state.uploads).toHaveLength(2);
+  expect(state.uploads[1].key).toBe(state.uploads[0].key);
+  expect(state.jobGets).toEqual([PROCESS_JOB_2]);
+  expect(state.starts).toHaveLength(0);
+
+  await closeProcessing(page);
+});
+
+test('Ручной запуск блокирует двойной клик и передаёт CSRF и ключ без тела', async ({ page }) => {
+  await page.clock.install();
+
+  const gate = deferred();
+  const state = await mockProcessing(page);
+
+  state.onProcess = async (route, id) => {
+    await gate.promise;
+    state.files = [processingFile(1, 'queued')];
+    await acceptProcessing(route, id);
+  };
+
+  state.onJob = async (route, id) => {
+    state.files = [processingFile()];
+    await processingReply(route, processingJob(id, 'succeeded'));
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  const start = processingPanel(page).getByRole('button', {
+    name: 'Извлечь текст',
+    exact: true,
+  });
+
+  try {
+    await expect(start).toBeEnabled();
+
+    await start.evaluate((button) => {
+      button.click();
+      button.click();
+    });
+
+    await expect.poll(() => state.starts.length).toBe(1);
+
+    await expect(processingPanel(page).getByRole('button', {
+      name: 'Отправляем запрос…',
+      exact: true,
+    })).toBeDisabled();
+
+    await page.clock.runFor(3000);
+
+    expect(state.starts).toHaveLength(1);
+    expect(state.starts[0].key).toMatch(PROCESS_UUID);
+    expect(state.starts[0].headers['x-csrf-token'])
+      .toBe('materials-csrf-' + state.csrfCount);
+    expect(state.starts[0].headers['content-type']).toBeUndefined();
+    expect(state.starts[0].body).toBeNull();
+  } finally {
+    gate.resolve();
+  }
+
+  await expectFirstTextPage(page);
+  expect(state.starts).toHaveLength(1);
+});
+
+test('Потерянный ответ запуска переживает закрытие и повторяется с прежним ключом', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'failed')],
+  });
+
+  state.onProcess = async (route, id) => {
+    state.files = [processingFile(1, 'failed', {
+      processingError: {
+        code: 'PDF_NO_TEXT',
+        message: 'Нет текста.',
+      },
+    })];
+
+    if (state.starts.length === 1) await route.abort('failed');
+    else await acceptProcessing(route, id);
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  }).click();
+
+  await expect(processingPanel(page)).toContainText('Ответ не подтверждён');
+
+  await closeProcessing(page);
+  await openProcessing(page);
+
+  const retry = processingPanel(page).getByRole('button', {
+    name: 'Повторить запрос запуска',
+    exact: true,
+  });
+
+  await expect(retry).toBeEnabled();
+  await page.clock.runFor(3000);
+
+  expect(state.starts).toHaveLength(1);
+
+  await retry.click();
+
+  await expect(processingPanel(page)).toContainText('В PDF нет текстового слоя');
+  await expect(processingPanel(page))
+    .toContainText('Повтор обработки этого файла не устранит причину ошибки');
+  await expect(retry).toHaveCount(0);
+
+  expect(state.starts).toHaveLength(2);
+  expect(state.starts[1].key).toBe(state.starts[0].key);
+
+  await expect(processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  })).toHaveCount(0);
+});
+
+test('Retry-After блокирует кнопку после открытия и не запускает повтор автоматически', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'failed')],
+  });
+
+  state.onProcess = async (route, id) => {
+    if (state.starts.length === 1) {
+      await route.fulfill({
+        status: 429,
+        headers: { 'Retry-After': '30' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Подожди.',
+            fieldErrors: {},
+          },
+        },
+      });
+    } else {
+      state.files = [processingFile()];
+      await acceptProcessing(route, id);
+    }
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  }).click();
+
+  await expect(processingPanel(page)).toContainText('Повтор доступен через');
+
+  await closeProcessing(page);
+  await openProcessing(page);
+
+  const retry = processingPanel(page).getByRole('button', {
+    name: 'Повторить запрос запуска',
+    exact: true,
+  });
+
+  await expect(retry).toBeDisabled();
+  await page.clock.runFor(30_500);
+  await expect(retry).toBeEnabled();
+
+  expect(state.starts).toHaveLength(1);
+
+  await retry.click();
+  await expectFirstTextPage(page);
+
+  expect(state.starts[1].key).toBe(state.starts[0].key);
+});
+
+test('CSRF восстанавливает ту же сессию и оставляет повтор запуска ручным', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'failed')],
+  });
+
+  state.onProcess = async (route, id) => {
+    if (state.starts.length === 1) {
+      await fail(route, 403, 'CSRF_INVALID');
+    } else {
+      state.files = [processingFile()];
+      await acceptProcessing(route, id);
+    }
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  const csrfBefore = state.csrfCount;
+
+  await processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  }).click();
+
+  await expect.poll(() => state.csrfCount).toBeGreaterThan(csrfBefore);
+
+  const retry = processingPanel(page).getByRole('button', {
+    name: 'Повторить запрос запуска',
+    exact: true,
+  });
+
+  await expect(retry).toBeEnabled();
+  await page.clock.runFor(3000);
+
+  expect(state.starts).toHaveLength(1);
+
+  await retry.click();
+  await expectFirstTextPage(page);
+
+  expect(state.starts[1].key).toBe(state.starts[0].key);
+  expect(state.starts[1].headers['x-csrf-token'])
+    .not.toBe(state.starts[0].headers['x-csrf-token']);
+});
+
+test('Ошибки PDF показывают безопасный текст и различают возможность повтора', async ({ page }) => {
+  const state = await mockProcessing(page, {
+    files: [
+      processingFile(1, 'failed', {
+        processingError: {
+          code: 'PDF_ENCRYPTED',
+          message: 'Секретный путь сервера.',
+        },
+      }),
+      processingFile(2, 'failed', {
+        processingJobId: PROCESS_JOB_2,
+      }),
+    ],
+  });
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  await expect(processingPanel(page)).toContainText('PDF зашифрован');
+  await expect(processingPanel(page)).not.toContainText('Секретный путь сервера.');
+
+  await expect(processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  })).toHaveCount(0);
+
+  await closeProcessing(page);
+  await openProcessing(page, material(2));
+
+  await expect(processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  })).toBeEnabled();
+
+  expect(state.starts).toHaveLength(0);
+});
+
+test('Поздний текст после выхода не возвращается и не попадает в другой аккаунт', async ({ page }) => {
+  const gate = deferred();
+  let responded = false;
+  const privateText = 'PRIVATE_TEXT_AFTER_LOGOUT';
+
+  const state = await mockProcessing(page, {
+    files: [processingFile()],
+  });
+
+  state.onText = async (route) => {
+    await gate.promise;
+
+    const rows = PDF_TEXT_PAGES.slice(0, 5).map((row) => ({
+      ...row,
+      text: row.pageNumber === 1 ? privateText : row.text,
+    }));
+
+    // Ответ намеренно приходит после отмены браузерного запроса.
+    await listResponse(route, rows, PDF_TEXT_PAGES.length).catch(() => {});
+    responded = true;
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  try {
+    await expect.poll(() => state.textGets.length).toBe(1);
+
+    await account(page).getByRole('button', {
+      name: 'Выйти из аккаунта',
+      exact: true,
+    }).click();
+
+    await expect(page.getByRole('heading', {
+      name: 'С возвращением!',
+      exact: true,
+    })).toBeVisible();
+
+    state.loginUser = OTHER_USER;
+    state.subjects = [OTHER_SUBJECT];
+    state.files = [];
+    state.onText = null;
+
+    await page.getByLabel('Email', { exact: true }).fill(OTHER_USER.email);
+    await page.getByLabel('Пароль', { exact: true })
+      .fill('Only-for-material-tests!');
+    await page.getByRole('button', { name: 'Войти', exact: true }).click();
+
+    await expect(account(page).getByText(
+      OTHER_USER.email,
+      { exact: true },
+    )).toBeVisible();
+
+    await openMaterials(page, OTHER_SUBJECT);
+  } finally {
+    gate.resolve();
+  }
+
+  await expect.poll(() => responded).toBe(true);
+  await expect(processingPanel(page)).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText(privateText);
+
+  await expect(materials(page).getByText(
+    'Пока нет материалов',
+    { exact: true },
+  )).toBeVisible();
+});
+
+test('Подтверждённая новая попытка после ошибки получает новый ключ', async ({ page }) => {
+  await page.clock.install();
+
+  const state = await mockProcessing(page, {
+    files: [processingFile(1, 'failed')],
+  });
+
+  state.onProcess = async (route, id) => {
+    const jobId = state.starts.length === 1 ? PROCESS_JOB_1 : PROCESS_JOB_2;
+
+    state.files = [processingFile(1, 'failed', {
+      processingJobId: jobId,
+    })];
+
+    await acceptProcessing(route, id, jobId);
+  };
+
+  await openMaterials(page);
+  await openProcessing(page);
+
+  const retry = processingPanel(page).getByRole('button', {
+    name: 'Повторить обработку',
+    exact: true,
+  });
+
+  await retry.click();
+
+  await expect.poll(() => state.materialGets.length).toBe(2);
+  await expect(retry).toBeEnabled();
+  await page.clock.runFor(3000);
+
+  expect(state.starts).toHaveLength(1);
+
+  await retry.click();
+
+  await expect.poll(() => state.materialGets.length).toBe(3);
+  await expect(retry).toBeEnabled();
+
+  expect(state.starts).toHaveLength(2);
+  expect(state.starts[1].key).not.toBe(state.starts[0].key);
+});
+
+for (const code of ['PROCESSING_IN_PROGRESS', 'TEXT_ALREADY_EXTRACTED']) {
+  test('Конфликт ' + code + ' обновляет материал без повторного запуска', async ({ page }) => {
+    const state = await mockProcessing(page);
+
+    state.onProcess = async (route) => {
+      state.files = [processingFile(
+        1,
+        code === 'TEXT_ALREADY_EXTRACTED' ? 'ready' : 'queued',
+      )];
+
+      await fail(route, 409, code);
+    };
+
+    state.onJob = async (route, id) => {
+      state.files = [processingFile()];
+      await processingReply(route, processingJob(id, 'succeeded'));
+    };
+
+    await openMaterials(page);
+    await openProcessing(page);
+
+    await processingPanel(page).getByRole('button', {
+      name: 'Извлечь текст',
+      exact: true,
+    }).click();
+
+    await expectFirstTextPage(page);
+    expect(state.starts).toHaveLength(1);
+  });
+}

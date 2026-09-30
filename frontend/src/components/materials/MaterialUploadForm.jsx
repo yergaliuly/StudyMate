@@ -314,10 +314,10 @@ export default function MaterialUploadForm({
     callbacks.current.onStart();
 
     try {
-      await materialApi.upload(attempt.values, {
-        idempotencyKey: attempt.key,
-        signal: controller.signal,
-      });
+      const uploaded = await materialApi.upload(attempt.values, {
+      idempotencyKey: attempt.key,
+      signal: controller.signal,
+    });
 
       if (!current()) return;
 
@@ -340,7 +340,7 @@ export default function MaterialUploadForm({
         fileInputRef.current.value = '';
       }
 
-      callbacks.current.onUploaded();
+      callbacks.current.onUploaded(uploaded);
     } catch (error) {
       if (!current()) return;
 
