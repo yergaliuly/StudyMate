@@ -5,6 +5,36 @@ const UTC_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 const INVALID_TEXT = /[\u0000-\u001f\u007f\ud800-\udfff]/u;
 const STATUSES = new Set(['uploading', 'stored', 'deleting']);
 
+const PROCESSING_STATUSES = new Set([
+  'not_started', 'queued', 'running', 'ready', 'failed', 'cancelled',
+]);
+
+const PROCESSING_FIELDS = [
+  'processingJobId', 'pageCount', 'textCharacters', 'processingError',
+];
+
+const PROCESSING_ERROR_CODES = new Set([
+  'JOB_TEMPORARY_FAILURE',
+  'JOB_PROCESSING_FAILED',
+  'JOB_ATTEMPTS_EXHAUSTED',
+  'JOB_LEASE_EXPIRED',
+  'JOB_OUTCOME_UNKNOWN',
+  'PDF_INVALID',
+  'PDF_ENCRYPTED',
+  'PDF_NO_TEXT',
+  'PDF_TOO_MANY_PAGES',
+  'PDF_TEXT_LIMIT',
+  'PDF_TIMEOUT',
+  'PDF_RESOURCE_LIMIT',
+  'PDF_WORKER_FAILED',
+  'PDF_ORIGINAL_MISMATCH',
+]);
+
+const MAX_PDF_PAGES = 200;
+const MAX_PAGE_CHARACTERS = 100_000;
+const MAX_DOCUMENT_CHARACTERS = 1_000_000;
+const INVALID_PAGE_TEXT = /[\u0000\ud800-\udfff]/u;
+
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -67,7 +97,7 @@ function invalidResponse(status) {
   );
 }
 
-function toMaterial(data, status) {
+function toMaterial(data, status, allowLegacyUpload = false) {
   if (
     !isRecord(data)
     || !isUuid(data.id)
@@ -78,7 +108,7 @@ function toMaterial(data, status) {
     || data.contentType !== 'application/pdf'
     || !isPositiveInteger(data.sizeBytes)
     || !STATUSES.has(data.status)
-    || data.processingStatus !== 'not_started'
+    || !PROCESSING_STATUSES.has(data.processingStatus)
     || !isPositiveInteger(data.version)
     || !isTimestamp(data.createdAt)
     || !isTimestamp(data.updatedAt)
@@ -92,7 +122,7 @@ function toMaterial(data, status) {
 
   if (!validDeletionJob) throw invalidResponse(status);
 
-  return {
+  const material = {
     id: data.id,
     subjectId: data.subjectId,
     title: data.title,
@@ -106,14 +136,83 @@ function toMaterial(data, status) {
     updatedAt: data.updatedAt,
     deletionJobId: data.deletionJobId,
   };
+
+  // Только исторический ответ upload может содержать прежние 12 полей.
+  const legacyUpload = allowLegacyUpload
+    && data.processingStatus === 'not_started'
+    && PROCESSING_FIELDS.every((field) => !Object.hasOwn(data, field));
+
+  if (legacyUpload) return material;
+
+  if (PROCESSING_FIELDS.some((field) => !Object.hasOwn(data, field))) {
+    throw invalidResponse(status);
+  }
+
+  const validProcessingJob = data.processingStatus === 'not_started'
+    ? data.processingJobId === null
+    : isUuid(data.processingJobId);
+
+  const noText = data.pageCount === null && data.textCharacters === null;
+  const hasText = isPositiveInteger(data.pageCount)
+    && data.pageCount <= MAX_PDF_PAGES
+    && isPositiveInteger(data.textCharacters)
+    && data.textCharacters <= MAX_DOCUMENT_CHARACTERS
+    && data.textCharacters <= data.pageCount * MAX_PAGE_CHARACTERS;
+
+  const validError = data.processingStatus === 'failed'
+    ? isRecord(data.processingError)
+      && PROCESSING_ERROR_CODES.has(data.processingError.code)
+      && typeof data.processingError.message === 'string'
+      && data.processingError.message.trim().length > 0
+    : data.processingError === null;
+
+  if (
+    !validProcessingJob
+    || (!noText && !hasText)
+    || (data.processingStatus === 'ready' && !hasText)
+    || (data.processingStatus === 'not_started' && !noText)
+    || !validError
+  ) {
+    throw invalidResponse(status);
+  }
+
+  // Хранение и обработка независимы: deleting может сохранять готовый текст.
+  return {
+    ...material,
+    processingJobId: data.processingJobId,
+    pageCount: data.pageCount,
+    textCharacters: data.textCharacters,
+    processingError: data.processingError === null
+      ? null
+      : {
+          code: data.processingError.code,
+          message: data.processingError.message,
+        },
+  };
 }
 
-function readMaterial(result, expectedStatus) {
+function readMaterial(result, expectedStatus, allowLegacyUpload = false) {
   if (result.status !== expectedStatus) {
     throw invalidResponse(result.status);
   }
 
-  return toMaterial(result.data, result.status);
+  return toMaterial(result.data, result.status, allowLegacyUpload);
+}
+
+function readOperation(result, requestedId) {
+  const data = result.data;
+
+  if (
+    result.status !== 202
+    || !isRecord(data)
+    || !isUuid(data.materialId)
+    || !sameUuid(data.materialId, requestedId)
+    || !isUuid(data.jobId)
+  ) {
+    throw invalidResponse(result.status);
+  }
+
+  return { materialId: data.materialId, jobId: data.jobId };
 }
 
 function isDownloadUrl(value) {
@@ -237,7 +336,7 @@ export function createMaterialApi(client = apiClient) {
       signal,
     });
 
-    const material = readMaterial(result, 201);
+    const material = readMaterial(result, 201, true);
     if (
       !sameUuid(material.subjectId, subjectId)
       || material.status !== 'stored'
@@ -301,22 +400,94 @@ export function createMaterialApi(client = apiClient) {
       signal,
     });
 
-    const data = result.data;
-    if (
-      result.status !== 202
-      || !isRecord(data)
-      || !isUuid(data.materialId)
-      || !sameUuid(data.materialId, id)
-      || !isUuid(data.jobId)
-    ) {
-      throw invalidResponse(result.status);
-    }
-
-    // Это запуск очистки. Наблюдение за jobId подключается отдельно в UI.
-    return { materialId: data.materialId, jobId: data.jobId };
+    return readOperation(result, id);
   }
 
-  return { list, getById, upload, rename, getDownload, remove };
+  async function process(id, { idempotencyKey, signal } = {}) {
+    requireUuid(id, 'id');
+    const key = requireUuid(idempotencyKey, 'Idempotency-Key');
+
+    const result = await client.request('/materials/' + id + '/process', {
+      method: 'POST',
+      idempotencyKey: key,
+      signal,
+    });
+
+    // Только запуск или получение прежнего задания: без опроса и повторов.
+    return readOperation(result, id);
+  }
+
+  async function pages(id, { page = 1, pageSize = 20, signal } = {}) {
+    requireUuid(id, 'id');
+
+    if (
+      !isPositiveInteger(page)
+      || !isPositiveInteger(pageSize)
+      || pageSize > 100
+    ) {
+      throw new RangeError('Некорректные параметры страницы текста.');
+    }
+
+    const result = await client.request('/materials/' + id + '/pages', {
+      method: 'GET',
+      query: { page, pageSize },
+      signal,
+    });
+
+    const { data, meta, status } = result;
+    if (
+      status !== 200
+      || !Array.isArray(data)
+      || !isRecord(meta)
+      || meta.page !== page
+      || meta.pageSize !== pageSize
+      || !isPositiveInteger(meta.total)
+      || meta.total > MAX_PDF_PAGES
+    ) {
+      throw invalidResponse(status);
+    }
+
+    // Сначала проверяем конец списка: огромный page не умножаем на pageSize.
+    if (page > Math.ceil(meta.total / pageSize)) {
+      if (data.length !== 0) throw invalidResponse(status);
+      return {
+        pages: [],
+        meta: { page: meta.page, pageSize: meta.pageSize, total: meta.total },
+      };
+    }
+
+    const offset = (page - 1) * pageSize;
+    const expectedLength = Math.min(pageSize, meta.total - offset);
+    if (data.length !== expectedLength) throw invalidResponse(status);
+
+    let characters = 0;
+    const textPages = data.map((item, index) => {
+      if (
+        !isRecord(item)
+        || item.pageNumber !== offset + index + 1
+        || typeof item.text !== 'string'
+        || item.text.length > MAX_PAGE_CHARACTERS
+        || INVALID_PAGE_TEXT.test(item.text)
+      ) {
+        throw invalidResponse(status);
+      }
+
+      characters += item.text.length;
+      if (characters > MAX_DOCUMENT_CHARACTERS) {
+        throw invalidResponse(status);
+      }
+
+      // Пустой текст, пробелы и переводы строк сохраняются без изменений.
+      return { pageNumber: item.pageNumber, text: item.text };
+    });
+
+    return {
+      pages: textPages,
+      meta: { page: meta.page, pageSize: meta.pageSize, total: meta.total },
+    };
+  }
+
+  return { list, getById, upload, rename, getDownload, remove, process, pages };
 }
 
 export const materialApi = createMaterialApi();
