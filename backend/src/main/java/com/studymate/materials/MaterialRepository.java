@@ -140,21 +140,24 @@ class MaterialRepository {
 
   @Transactional(timeout = 10)
   public Deletion delete(UUID owner, UUID id) {
-    // Completion locks its job before owner/object. Lock both current jobs before revoking either.
-    UUID processing=processingJob(owner,id), summary=summaryJob(owner,id);
+    // Completion locks its job before owner/object. Lock all current jobs before revoking any.
+    UUID processing=processingJob(owner,id), summary=summaryJob(owner,id), quiz=quizJob(owner,id);
     var toLock=new java.util.ArrayList<UUID>();
     if(processing!=null) toLock.add(processing);
     if(summary!=null && !summary.equals(processing)) toLock.add(summary);
+    if(quiz!=null && !toLock.contains(quiz)) toLock.add(quiz);
     toLock.sort(UUID::compareTo);
     for(UUID jobId:toLock) jdbc.sql("SELECT id FROM studymate.jobs WHERE owner_id=:owner AND id=:job FOR UPDATE")
         .param("owner",owner).param("job",jobId).query(UUID.class).single();
     lockOwner(owner);
     var object = object(owner,id,true);
     if (object.state().equals("deleted")) throw notFound();
-    if(!java.util.Objects.equals(processing,processingJob(owner,id)) || !java.util.Objects.equals(summary,summaryJob(owner,id)))
+    if(!java.util.Objects.equals(processing,processingJob(owner,id)) || !java.util.Objects.equals(summary,summaryJob(owner,id))
+        || !java.util.Objects.equals(quiz,quizJob(owner,id)))
       throw new ApiException(HttpStatus.CONFLICT,"REQUEST_IN_PROGRESS","Обработка только что изменилась. Повтори удаление.",Map.of(),1);
     if(processing!=null) jobs.cancel(owner,processing);
     if(summary!=null) jobs.cancel(owner,summary);
+    if(quiz!=null) jobs.cancel(owner,quiz);
     if (object.jobId() != null) {
       String status = jdbc.sql("SELECT status FROM studymate.jobs WHERE id=:id AND owner_id=:owner")
           .param("id",object.jobId()).param("owner",owner).query(String.class).single();
@@ -233,6 +236,10 @@ class MaterialRepository {
   }
   private UUID summaryJob(UUID owner,UUID id) {
     return jdbc.sql("SELECT summary_job_id FROM studymate.materials WHERE owner_id=:owner AND id=:id")
+        .param("owner",owner).param("id",id).query((r,n) -> r.getObject(1,UUID.class)).optional().orElse(null);
+  }
+  private UUID quizJob(UUID owner,UUID id) {
+    return jdbc.sql("SELECT quiz_job_id FROM studymate.materials WHERE owner_id=:owner AND id=:id")
         .param("owner",owner).param("id",id).query((r,n) -> r.getObject(1,UUID.class)).optional().orElse(null);
   }
   private void requireSubject(UUID owner, UUID id, boolean lock) {
