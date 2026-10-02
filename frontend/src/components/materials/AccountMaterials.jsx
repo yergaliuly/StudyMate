@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
 
 import { subjectApi } from '../../services/subjectApi.js';
 import { materialApi } from '../../services/materialApi.js';
@@ -9,6 +9,7 @@ import StorageUsage from './StorageUsage.jsx';
 import MaterialUploadForm from './MaterialUploadForm.jsx';
 import MaterialTextPanel, { processingLabels } from './MaterialTextPanel.jsx';
 import MaterialDeleteModal from './MaterialDeleteModal.jsx';
+import MaterialSummaryPanel from './MaterialSummaryPanel.jsx';
 import '../../styles/accountMaterials.css';
 
 const PAGE_SIZE = 20;
@@ -34,9 +35,13 @@ export default function AccountMaterials({
   const [selectedDeletionId, setSelectedDeletionId] = useState(
     record.selectedDeletionId ?? null,
   );
+  const [selectedSummaryId, setSelectedSummaryId] = useState(
+    record.selectedSummaryId ?? null,
+  );
   const materialOpenerRef = useRef(null);
   const materialSearchRef = useRef(null);
   const deleteButtonsRef = useRef(new Map());
+  const summaryButtonsRef = useRef(new Map());
 
   const runtime = useRef({
     mounted: false,
@@ -84,12 +89,18 @@ export default function AccountMaterials({
 
   const canUseMaterial = useCallback(
     (id) => canUseMaterials() && !record.selectedDeletionId
-      && record.selectedMaterialId === id,
+      && !record.selectedSummaryId && record.selectedMaterialId === id,
     [canUseMaterials, record],
   );
 
   const canDeleteMaterial = useCallback(
     (id) => canUseMaterials() && record.selectedDeletionId === id,
+    [canUseMaterials, record],
+  );
+
+  const canUseSummary = useCallback(
+    (id) => canUseMaterials() && !record.selectedDeletionId
+      && record.selectedSummaryId === id,
     [canUseMaterials, record],
   );
 
@@ -370,6 +381,8 @@ export default function AccountMaterials({
   function openMaterial(id, button) {
     if (!canUseMaterials() || record.selectedDeletionId) return;
 
+    record.selectedSummaryId = null;
+    setSelectedSummaryId(null);
     materialOpenerRef.current = button;
     record.selectedMaterialId = id;
     setSelectedMaterialId(id);
@@ -383,9 +396,32 @@ export default function AccountMaterials({
 
     window.requestAnimationFrame(() => {
       if (!canUseMaterials() || record.selectedMaterialId != null
-        || record.selectedDeletionId) return;
+        || record.selectedDeletionId || record.selectedSummaryId) return;
 
       const button = materialOpenerRef.current;
+      if (button?.isConnected) button.focus();
+      else materialSearchRef.current?.focus();
+    });
+  }
+
+  function openSummary(id) {
+    if (!canUseMaterials() || record.selectedDeletionId) return;
+    record.selectedMaterialId = null;
+    record.selectedSummaryId = id;
+    setSelectedMaterialId(null);
+    setSelectedSummaryId(id);
+  }
+
+  function closeSummary() {
+    if (!canUseMaterials()) return;
+    const id = record.selectedSummaryId;
+    record.selectedSummaryId = null;
+    setSelectedSummaryId(null);
+
+    window.requestAnimationFrame(() => {
+      if (!canUseMaterials() || record.selectedSummaryId
+        || record.selectedDeletionId || record.selectedMaterialId) return;
+      const button = summaryButtonsRef.current.get(id);
       if (button?.isConnected) button.focus();
       else materialSearchRef.current?.focus();
     });
@@ -396,8 +432,10 @@ export default function AccountMaterials({
 
     // Сразу закрываем доступ к прежним операциям, до размонтирования панели.
     record.selectedMaterialId = null;
+    record.selectedSummaryId = null;
     record.selectedDeletionId = id;
     setSelectedMaterialId(null);
+    setSelectedSummaryId(null);
     setSelectedDeletionId(id);
   }
 
@@ -484,6 +522,19 @@ export default function AccountMaterials({
               record={record}
               canAct={canUseMaterial}
               onClose={closeMaterial}
+              onAccessError={(error) => blockUpload('checking', error)}
+              onMaterialRead={refreshList}
+            />
+          )}
+
+          {selectedSummaryId && (
+            <MaterialSummaryPanel
+              key={selectedSummaryId}
+              materialId={selectedSummaryId}
+              subjectId={subjectId}
+              record={record}
+              canAct={canUseSummary}
+              onClose={closeSummary}
               onAccessError={(error) => blockUpload('checking', error)}
               onMaterialRead={refreshList}
             />
@@ -608,6 +659,21 @@ export default function AccountMaterials({
                       onClick={(event) => openMaterial(material.id, event.currentTarget)}
                     >
                       Обработка и текст
+                    </button>
+                    <button
+                      ref={(button) => {
+                        if (button) summaryButtonsRef.current.set(material.id, button);
+                        else summaryButtonsRef.current.delete(material.id);
+                      }}
+                      type="button"
+                      className="secondary-button"
+                      disabled={material.status !== 'stored'}
+                      aria-expanded={selectedSummaryId === material.id}
+                      aria-label={'Открыть конспект «' + material.title + '»'}
+                      onClick={() => openSummary(material.id)}
+                    >
+                      <BookOpen size={16} aria-hidden="true" />
+                      Конспект
                     </button>
                     <button
                       ref={(button) => {

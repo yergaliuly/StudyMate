@@ -26,6 +26,9 @@ const ERROR_CODES = new Set([
   'PDF_RESOURCE_LIMIT',
   'PDF_WORKER_FAILED',
   'PDF_ORIGINAL_MISMATCH',
+  'AI_UNAVAILABLE',
+  'AI_INVALID_RESPONSE',
+  'AI_OUTCOME_UNKNOWN',
 ]);
 
 function isRecord(value) {
