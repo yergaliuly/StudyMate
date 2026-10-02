@@ -310,3 +310,112 @@ test('Предварительный abort не отправляет GET/POST; �
     }
   }
 });
+
+function edited(changes = {}) {
+  return summary({ version: 2, origin: 'user', model: null, sourcePages: [],
+    inputTokens: null, outputTokens: null, ...changes });
+}
+
+test('PATCH передаёт только исходный content/version, cookie/CSRF/signal без Idempotency-Key', async () => {
+  const content = '  Первая строка\r\n\tВторая 😀\n  ';
+  const result = edited({ content: content.trim() });
+  const { api, calls } = await setupWrite(json({ data: result }));
+  const controller = new AbortController();
+  assert.deepEqual(await api.update(ID, { content, ownerId: OTHER_ID }, {
+    version: 1, signal: controller.signal, idempotencyKey: KEY,
+  }), result);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/v1/materials/' + ID + '/summary');
+  const options = calls[0].options;
+  assert.equal(options.method, 'PATCH');
+  assert.equal(options.credentials, 'include');
+  assert.equal(options.cache, 'no-store');
+  assert.equal(options.signal, controller.signal);
+  assert.equal(options.headers.get('X-CSRF-TOKEN'), 'test-csrf');
+  assert.equal(options.headers.get('Content-Type'), 'application/json');
+  assert.equal(options.headers.has('Idempotency-Key'), false);
+  assert.deepEqual(JSON.parse(options.body), { content, version: 1 });
+});
+
+test('PATCH принимает ручную версию при ready/failed/cancelled и не стирает состояние задания', async () => {
+  for (const status of ['ready', 'failed', 'cancelled']) {
+    const data = edited({ status, error: status === 'failed'
+      ? { code: 'AI_UNAVAILABLE', message: 'Ошибка прежней генерации.' } : null });
+    const { api } = await setupWrite(json({ data }));
+    assert.deepEqual(await api.update(ID, { content: data.content }, { version: 1 }), data);
+  }
+});
+
+test('PATCH проверяет UUID/version/непустой Unicode до сети и считает UTF-16 без trim', async () => {
+  const { api, calls } = await setupWrite();
+  for (const id of ['', null, OTHER_ID + '?query=1']) {
+    await assert.rejects(() => api.update(id, { content: 'Текст' }, { version: 1 }), TypeError);
+  }
+  for (const version of [undefined, null, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(() => api.update(ID, { content: 'Текст' }, { version }), RangeError);
+  }
+  for (const content of [undefined, null, 1, '', ' \t\r\n', '\ud800', 'a\0b',
+    'a'.repeat(100_001), '😀'.repeat(50_001), ' '.repeat(100_000) + 'a']) {
+    await assert.rejects(() => api.update(ID, { content }, { version: 1 }), RangeError);
+  }
+  assert.equal(calls.length, 0);
+  const content = '😀'.repeat(50_000);
+  const valid = await setupWrite(json({ data: edited({ content }) }));
+  assert.equal((await valid.api.update(ID, { content }, { version: 1 })).content, content);
+});
+
+test('PATCH не принимает старую/чужую/машинную версию или признаки выполняющейся генерации', async () => {
+  for (const data of [
+    edited({ materialId: OTHER_ID }), edited({ version: 1 }), edited({ version: 3 }),
+    summary({ version: 2 }), edited({ status: 'queued' }), edited({ status: 'running' }),
+    edited({ model: 'fake-local' }), edited({ sourcePages: [1] }), edited({ inputTokens: 0 }),
+  ]) {
+    const { api, calls } = await setupWrite(json({ data }));
+    await assert.rejects(() => api.update(ID, { content: 'Текст' }, { version: 1 }), errorIs('INVALID_RESPONSE'));
+    assert.equal(calls.length, 1);
+  }
+  for (const response of [json({ data: edited() }, 201), json({ result: edited() }), new Response(null, { status: 204 })]) {
+    const { api } = await setupWrite(response);
+    await assert.rejects(() => api.update(ID, { content: 'Текст' }, { version: 1 }), errorIs('INVALID_RESPONSE'));
+  }
+});
+
+test('PATCH сохраняет ошибки и fieldErrors без автоматической перезаписи или чтения', async () => {
+  for (const [status, code] of [
+    [401, 'AUTHENTICATION_REQUIRED'], [403, 'CSRF_INVALID'], [404, 'SUMMARY_NOT_FOUND'],
+    [404, 'MATERIAL_NOT_FOUND'], [409, 'MATERIAL_NOT_AVAILABLE'], [409, 'SUMMARY_IN_PROGRESS'],
+    [409, 'SUMMARY_VERSION_CONFLICT'], [422, 'VALIDATION_FAILED'], [429, 'RATE_LIMITED'],
+    [503, 'SERVICE_UNAVAILABLE'],
+  ]) {
+    const fieldErrors = status === 422 ? { content: 'Недопустимое значение.' } : {};
+    const { api, calls } = await setupWrite(json({ error: { code, message: 'Ошибка', fieldErrors } },
+      status, { 'Retry-After': '2' }));
+    await assert.rejects(() => api.update(ID, { content: 'Текст' }, { version: 1 }), (error) => {
+      errorIs(code, status)(error);
+      assert.deepEqual(error.fieldErrors, fieldErrors);
+      assert.equal(error.retryAfterSeconds, 2);
+      return true;
+    });
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('PATCH не обходит CSRF, не повторяет сетевую ошибку и учитывает abort', async () => {
+  const noCsrf = setup();
+  await assert.rejects(() => noCsrf.api.update(ID, { content: 'Текст' }, { version: 1 }), errorIs('CSRF_NOT_INITIALIZED'));
+  assert.equal(noCsrf.calls.length, 0);
+  const network = await setupWrite(() => { throw new TypeError('Сеть'); });
+  await assert.rejects(() => network.api.update(ID, { content: 'Текст' }, { version: 1 }), errorIs('NETWORK_ERROR'));
+  assert.equal(network.calls.length, 1);
+  for (const preAbort of [false, true]) {
+    const controller = new AbortController();
+    const s = await setupWrite((_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Отмена', 'AbortError')), { once: true });
+    }));
+    if (preAbort) controller.abort();
+    const pending = s.api.update(ID, { content: 'Текст' }, { version: 1, signal: controller.signal });
+    if (!preAbort) controller.abort();
+    await assert.rejects(pending, errorIs('REQUEST_CANCELLED'));
+    assert.equal(s.calls.length, preAbort ? 0 : 1);
+  }
+});

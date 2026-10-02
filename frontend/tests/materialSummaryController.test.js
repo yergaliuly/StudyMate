@@ -13,6 +13,8 @@ const OTHER = '7f07410e-98f7-41a3-bfab-cbc387683fc1';
 const JOB = '095f15c2-1f89-4e09-a9ab-b3b281766f57';
 const OTHER_JOB = '195f15c2-1f89-4e09-a9ab-b3b281766f57';
 const KEY = '295f15c2-1f89-4e09-a9ab-b3b281766f57';
+const KEY2 = '395f15c2-1f89-4e09-a9ab-b3b281766f57';
+const THIRD_JOB = '495f15c2-1f89-4e09-a9ab-b3b281766f57';
 const material = (changes = {}) => ({ id: ID, subjectId: SUBJECT, status: 'stored', processingStatus: 'ready', title: 'Лекция', ...changes });
 const failure = (code, status = 0, extra = {}) => new ApiError('Частные детали сервера', { code, status, ...extra });
 const missing = () => failure('SUMMARY_NOT_FOUND', 404);
@@ -45,7 +47,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function setup({ record = {}, materialReads = [], summaryReads = [], generations = [], watch, onMaterialRead, makeKey } = {}) {
+function setup({ record = {}, materialReads = [], summaryReads = [], generations = [], watch, onMaterialRead, makeKey, canMutate } = {}) {
   let allowed = true;
   let timestamp = 1000;
   let currentSummary = missing();
@@ -64,6 +66,7 @@ function setup({ record = {}, materialReads = [], summaryReads = [], generations
   const controller = createMaterialSummaryController({
     record, materialId: ID, subjectId: SUBJECT,
     canAct: () => allowed,
+    canMutate,
     onChange: (value) => states.push(value),
     onAccessError: (error) => access.push(error),
     onMaterialRead: (value) => { freshMaterials.push(value); onMaterialRead?.(value); },
@@ -597,4 +600,404 @@ test('Снимки не дают подменить content/pages и не рас
   assert.equal(s.state.summary.content, '- Тезис (стр. 1)');
   assert.deepEqual(s.state.summary.sourcePages, [1]);
   for (const name of ['key', 'acceptedJobId', 'operation', 'observation']) assert.equal(Object.hasOwn(state, name), false);
+});
+
+const baseline = (value) => ({ jobId: value.jobId, version: value.version });
+const nextSummary = (status = 'queued', changes = {}) => summary('ready', {
+  jobId: OTHER_JOB, status,
+  error: status === 'failed' ? { code: 'AI_OUTCOME_UNKNOWN', message: 'Частные данные' } : null,
+  ...changes,
+});
+
+test('Только отдельный regenerate запускает новую генерацию; старый контент остаётся до подтверждённой версии', async () => {
+  const original = summary('ready');
+  const updated = nextSummary('ready', { version: 2, content: 'Новый конспект' });
+  const keys = [KEY, KEY2];
+  const s = setup({
+    summaryReads: [original, original, original, updated, updated, nextSummary('queued', { jobId: THIRD_JOB, version: 2, content: 'Новый конспект' })],
+    generations: [{ materialId: ID, jobId: OTHER_JOB }, { materialId: ID, jobId: THIRD_JOB }],
+    makeKey: () => keys.shift(),
+  });
+  await s.controller.refresh();
+  assert.equal(s.state.canRegenerate, true);
+  assert.equal(s.state.canEdit, true);
+  await s.controller.generate();
+  assert.equal(s.posts.length, 0);
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.posts.length, 1);
+  assert.equal(s.posts[0].idempotencyKey, KEY);
+  assert.equal(s.state.summary.content, original.content);
+  assert.equal(s.watches[0].id, OTHER_JOB);
+  assert.equal(s.state.canEdit, false);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.state.mutationUnresolved, true);
+  s.update(job('succeeded', { id: OTHER_JOB }));
+  await tick();
+  assert.equal(s.state.summary.content, 'Новый конспект');
+  assert.equal(s.state.canEdit, true);
+  assert.equal(s.state.canRegenerate, true);
+  assert.equal(s.state.mutationUnresolved, false);
+  await s.controller.regenerate(baseline(updated));
+  assert.equal(s.posts.length, 2);
+  assert.equal(s.posts[1].idempotencyKey, KEY2);
+  assert.notEqual(s.posts[0].idempotencyKey, s.posts[1].idempotencyKey);
+  assert.equal(s.state.summary.content, 'Новый конспект');
+  assert.equal(s.watches.at(-1).id, THIRD_JOB);
+});
+
+test('Новая генерация разрешена после failed/cancelled даже без первой сохранённой версии', async () => {
+  for (const status of ['failed', 'cancelled']) {
+    const original = summary(status);
+    const s = setup({
+      summaryReads: [original, original, summary('queued', { jobId: OTHER_JOB })],
+      generations: [{ materialId: ID, jobId: OTHER_JOB }],
+    });
+    await s.controller.refresh();
+    assert.equal(s.state.canRegenerate, true);
+    assert.equal(s.state.canEdit, false);
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.posts.length, 1);
+    assert.equal(s.watches[0].id, OTHER_JOB);
+    assert.equal(s.state.summary.content, null);
+  }
+});
+
+test('Изменившийся baseline требует нового подтверждения, а активный новый job только наблюдается', async () => {
+  for (const changed of [summary('ready', { version: 2, content: 'Правка другого окна' }), nextSummary('running'), nextSummary('ready', { version: 2 })]) {
+    const original = summary('ready');
+    const s = setup({ summaryReads: [original, changed] });
+    await s.controller.refresh();
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.posts.length, 0);
+    assert.equal(s.keyCount, 0);
+    assert.equal(s.state.summary.version, changed.version);
+    assert.equal(s.state.summary.jobId, changed.jobId);
+    if (changed.status === 'running') {
+      assert.equal(s.state.watching, true);
+      assert.equal(s.state.canEdit, false);
+    } else assert.match(s.state.message, /подтверди.*заново/);
+  }
+});
+
+test('Повторный клик regenerate не перекрывает preflight/POST и не создаёт второй ключ', async () => {
+  const original = summary('ready');
+  const pending = deferred();
+  const s = setup({
+    summaryReads: [original, original, nextSummary()],
+    generations: [pending.promise],
+  });
+  await s.controller.refresh();
+  const generating = s.controller.regenerate(baseline(original));
+  await s.controller.regenerate(baseline(original));
+  await tick();
+  await s.controller.generate();
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.posts.length, 1);
+  assert.equal(s.keyCount, 1);
+  pending.resolve({ materialId: ID, jobId: OTHER_JOB });
+  await generating;
+  assert.equal(s.state.pending, false);
+});
+
+test('Unknown/AI503 regeneration со старым terminal GET сохраняет попытку и повторяет только прежний ключ', async () => {
+  for (const error of [failure('NETWORK_ERROR'), failure('AI_UNAVAILABLE', 503)]) {
+    const original = summary('ready');
+    const s = setup({
+      summaryReads: [original, original, original, original, nextSummary()],
+      generations: [error, { materialId: ID, jobId: OTHER_JOB }],
+    });
+    await s.controller.refresh();
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.state.canRetry, true);
+    assert.equal(s.state.canRegenerate, false);
+    assert.equal(s.state.canEdit, false);
+    assert.equal(s.state.uncertain, error.code === 'NETWORK_ERROR');
+    await s.controller.refresh();
+    assert.equal(s.state.summary.content, original.content);
+    assert.equal(s.state.canRetry, true);
+    assert.equal(s.state.mutationUnresolved, true);
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.posts.length, 1);
+    await s.controller.generate(baseline(original));
+    assert.equal(s.posts.length, 2);
+    assert.equal(s.posts[1].idempotencyKey, KEY);
+    assert.equal(s.keyCount, 1);
+  }
+});
+
+test('Unknown regeneration сохраняет baseline/key через закрытие и восстановление сессии', async () => {
+  for (const error of [failure('NETWORK_ERROR'), failure('AUTHENTICATION_REQUIRED', 401), failure('CSRF_INVALID', 403)]) {
+    const record = {};
+    const original = summary('ready');
+    const first = setup({ record, summaryReads: [original, original], generations: [error] });
+    await first.controller.refresh();
+    await first.controller.regenerate(baseline(original));
+    first.controller.stop();
+    const second = setup({
+      record, summaryReads: [original, original, nextSummary()],
+      generations: [{ materialId: ID, jobId: OTHER_JOB }],
+    });
+    await second.controller.refresh();
+    assert.equal(second.state.canRetry, true);
+    assert.equal(second.state.canRegenerate, false);
+    assert.equal(second.state.canEdit, false);
+    assert.equal(second.posts.length, 0);
+    await second.controller.generate(baseline(original));
+    assert.equal(second.posts[0].idempotencyKey, KEY);
+    assert.equal(second.keyCount, 0);
+  }
+});
+
+test('Новый job после потерянного ответа наблюдается; его terminal завершает попытку без нового POST', async () => {
+  const original = summary('ready');
+  const failed = nextSummary('failed');
+  const s = setup({
+    summaryReads: [original, original, nextSummary('running'), failed],
+    generations: [failure('NETWORK_ERROR')],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  await s.controller.refresh();
+  assert.equal(s.state.canRetry, false);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.watches[0].id, OTHER_JOB);
+  assert.equal(s.posts.length, 1);
+  s.update(job('failed', { id: OTHER_JOB }));
+  await tick();
+  assert.equal(s.state.summary.content, original.content);
+  assert.equal(s.state.canRegenerate, true);
+  assert.equal(s.state.canEdit, true);
+  assert.equal(s.state.mutationUnresolved, false);
+  assert.equal(s.posts.length, 1);
+});
+
+test('Старый terminal после принятого нового job не разрешает новую генерацию или редактирование', async () => {
+  const original = summary('ready');
+  const s = setup({
+    summaryReads: [original, original, original, original, nextSummary('ready', { version: 2 })],
+    generations: [{ materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.watches[0].id, OTHER_JOB);
+  s.update(job('succeeded', { id: OTHER_JOB }));
+  await tick();
+  assert.equal(s.state.watching, false);
+  assert.equal(s.state.watchError, 'STATUS_NOT_CONFIRMED');
+  assert.equal(s.state.canEdit, false);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.state.canRetry, false);
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.posts.length, 1);
+  await s.controller.refresh();
+  assert.equal(s.state.canEdit, true);
+  assert.equal(s.state.canRegenerate, true);
+});
+
+test('Terminal чужого job не завершает принятую regeneration', async () => {
+  const original = summary('ready');
+  const s = setup({
+    summaryReads: [original, original, original],
+    generations: [{ materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  s.update(job('succeeded'));
+  assert.equal(s.state.canEdit, false);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.state.mutationUnresolved, true);
+  assert.ok(s.state.watchError);
+  assert.equal(s.summaryCalls.length, 3);
+});
+
+test('Терминальный другой summary не подменяет ещё не проверенный accepted job', async () => {
+  const original = summary('ready');
+  const other = nextSummary('ready', { jobId: THIRD_JOB, version: 3 });
+  const s = setup({
+    summaryReads: [original, original, other, other],
+    generations: [{ materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.watches[0].id, OTHER_JOB);
+  assert.equal(s.state.canEdit, false);
+  s.update(job('succeeded', { id: OTHER_JOB }));
+  await tick();
+  assert.equal(s.state.canEdit, true);
+  assert.equal(s.state.canRegenerate, true);
+  assert.equal(s.state.summary.jobId, THIRD_JOB);
+});
+
+test('Динамический canMutate запрещает начало и изменение после preflight, чтение доступно', async () => {
+  let allowed = false;
+  const original = summary('ready');
+  const preflight = deferred();
+  const s = setup({
+    canMutate: () => allowed,
+    materialReads: [material(), preflight.promise],
+    summaryReads: [original, original],
+  });
+  await s.controller.refresh();
+  assert.equal(s.state.canEdit, true);
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.calls.length, 2);
+  allowed = true;
+  const generating = s.controller.regenerate(baseline(original));
+  allowed = false;
+  preflight.resolve(material());
+  await generating;
+  assert.equal(s.posts.length, 0);
+  assert.equal(s.keyCount, 0);
+  assert.equal(s.state.pending, false);
+  assert.equal(s.state.canEdit, true);
+});
+
+test('canEdit требует свежий terminal с сохранённым текстом и блокируется на время refresh', async () => {
+  const pending = deferred();
+  const s = setup({ summaryReads: [summary('ready'), pending.promise] });
+  await s.controller.refresh();
+  assert.equal(s.state.canEdit, true);
+  const refreshing = s.controller.refresh();
+  await tick();
+  assert.equal(s.state.canEdit, false);
+  pending.reject(failure('NETWORK_ERROR'));
+  await refreshing;
+  assert.equal(s.state.canEdit, false);
+  assert.ok(s.state.summary.content);
+});
+
+test('Key collision/summary in progress не разрешают rotation на прежнем baseline', async () => {
+  for (const code of ['IDEMPOTENCY_KEY_REUSED', 'SUMMARY_IN_PROGRESS']) {
+    const original = summary('ready');
+    const s = setup({ summaryReads: [original, original, original, nextSummary('ready', { version: 2 })], generations: [failure(code, 409)] });
+    await s.controller.refresh();
+    await s.controller.regenerate(baseline(original));
+    await s.controller.refresh();
+    assert.equal(s.state.canRetry, false);
+    assert.equal(s.state.canRegenerate, false);
+    assert.equal(s.state.canEdit, false);
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.posts.length, 1);
+    await s.controller.refresh();
+    assert.equal(s.state.canRegenerate, true);
+    assert.equal(s.state.canEdit, true);
+  }
+});
+
+test('202 с прежним baseline jobId и откат сохранённой версии не выдаются за новую генерацию', async () => {
+  const original = summary('ready');
+  const sameJob = setup({ summaryReads: [original, original], generations: [{ materialId: ID, jobId: JOB }] });
+  await sameJob.controller.refresh();
+  await sameJob.controller.regenerate(baseline(original));
+  assert.equal(sameJob.state.uncertain, true);
+  assert.equal(sameJob.state.canRegenerate, false);
+  assert.equal(sameJob.state.canRetry, true);
+  for (const invalid of [summary('queued', { jobId: OTHER_JOB }), nextSummary('ready', { version: 0 })]) {
+    const s = setup({ summaryReads: [original, original, invalid], generations: [{ materialId: ID, jobId: OTHER_JOB }] });
+    await s.controller.refresh();
+    await s.controller.regenerate(baseline(original));
+    assert.equal(s.state.summary.content, original.content);
+    assert.equal(s.state.canEdit, false);
+    assert.equal(s.state.canRegenerate, false);
+    assert.equal(s.state.watching, true);
+  }
+});
+
+test('Последняя проверка canMutate перед POST не оставляет фиктивную неопределённую попытку', async () => {
+  let checks = 0;
+  const original = summary('ready');
+  const s = setup({
+    summaryReads: [original, original],
+    canMutate: () => ++checks < 3,
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  assert.equal(checks, 3);
+  assert.equal(s.posts.length, 0);
+  assert.equal(s.state.mutationUnresolved, false);
+  assert.equal(s.state.canEdit, true);
+  assert.equal(s.state.canRetry, false);
+});
+
+test('Временный SUMMARY404 после принятой regeneration сохраняет прежний текст без разрешения новых записей', async () => {
+  const original = summary('ready');
+  const s = setup({
+    summaryReads: [original, original, missing(), nextSummary('ready', { version: 2, content: 'Новая версия' })],
+    generations: [{ materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  assert.equal(s.state.summary.content, original.content);
+  assert.equal(s.state.canEdit, false);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.watches[0].id, OTHER_JOB);
+  s.update(job('succeeded', { id: OTHER_JOB }));
+  await tick();
+  assert.equal(s.state.summary.content, 'Новая версия');
+  assert.equal(s.state.canEdit, true);
+});
+
+test('Retry неизвестной regeneration требует снимок из отдельного подтверждения даже без изменения версии', async () => {
+  const original = summary('ready');
+  const s = setup({ summaryReads: [original, original], generations: [failure('NETWORK_ERROR')] });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  const calls = s.calls.length;
+  for (const expected of [undefined, null, {}, { jobId: JOB }, { jobId: JOB, version: 0 }]) {
+    await s.controller.generate(expected);
+  }
+  assert.equal(s.posts.length, 1);
+  assert.equal(s.calls.length, calls);
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.state.canRetry, true);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.state.canEdit, false);
+});
+
+test('Подтверждение изменённой версии того же job восстанавливает неизвестную попытку с исходным key и baseline', async () => {
+  const original = summary('ready');
+  const edited = summary('ready', { version: 2, content: 'Правки из другого окна', origin: 'user', model: null, sourcePages: [] });
+  const s = setup({
+    summaryReads: [original, original, edited, edited, nextSummary('queued', { version: 2, content: edited.content })],
+    generations: [failure('NETWORK_ERROR'), { materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  await s.controller.refresh();
+  assert.equal(s.state.summary.content, edited.content);
+  assert.equal(s.state.canRetry, true);
+  assert.equal(s.state.canRegenerate, false);
+  assert.equal(s.state.canEdit, false);
+  assert.equal(s.state.mutationUnresolved, true);
+  await s.controller.generate(baseline(edited));
+  assert.equal(s.posts.length, 2);
+  assert.equal(s.posts[1].idempotencyKey, KEY);
+  assert.equal(s.keyCount, 1);
+  assert.deepEqual(s.record.summary[ID].baseline, baseline(original));
+  assert.equal(s.state.summary.content, edited.content);
+  assert.equal(s.watches[0].id, OTHER_JOB);
+});
+
+test('Изменение после подтверждения retry не отправляет POST; следующее подтверждение продолжает прежний key', async () => {
+  const original = summary('ready');
+  const edited = summary('ready', { version: 2, content: 'Первая правка' });
+  const newer = summary('ready', { version: 3, content: 'Ещё одна правка' });
+  const s = setup({
+    summaryReads: [original, original, edited, newer, newer, nextSummary('queued', { version: 3, content: newer.content })],
+    generations: [failure('NETWORK_ERROR'), { materialId: ID, jobId: OTHER_JOB }],
+  });
+  await s.controller.refresh();
+  await s.controller.regenerate(baseline(original));
+  await s.controller.refresh();
+  await s.controller.generate(baseline(edited));
+  assert.equal(s.posts.length, 1);
+  assert.equal(s.state.summary.version, 3);
+  assert.match(s.state.message, /подтверди.*заново/);
+  assert.equal(s.state.canRetry, true);
+  assert.equal(s.state.canEdit, false);
+  await s.controller.generate(baseline(newer));
+  assert.equal(s.posts.length, 2);
+  assert.equal(s.posts[1].idempotencyKey, KEY);
+  assert.equal(s.keyCount, 1);
+  assert.deepEqual(s.record.summary[ID].baseline, baseline(original));
 });

@@ -1,0 +1,111 @@
+.summary-edit,
+.summary-edit-form,
+.summary-edit-field,
+.summary-edit-review {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.summary-edit > button {
+  justify-self: start;
+}
+
+.summary-edit-form {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.summary-edit-field {
+  gap: 8px;
+}
+
+.summary-edit-field label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.summary-edit-field textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 240px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  resize: vertical;
+}
+
+.summary-edit-field textarea:disabled {
+  background: #f4f5fb;
+  color: var(--muted);
+}
+
+.summary-edit-field textarea[aria-invalid="true"] {
+  border-color: #c34c69;
+}
+
+.summary-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.summary-edit button,
+.summary-edit p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.summary-edit-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-edit-comparison > div {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e0def4;
+  border-radius: 13px;
+  background: #f9f8ff;
+}
+
+.summary-edit-comparison h4 {
+  font-size: 14px;
+}
+
+.summary-edit-comparison pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.7;
+}
+
+@media (max-width: 640px) {
+  .summary-edit-form {
+    padding: 16px;
+  }
+
+  .summary-edit-comparison {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .summary-edit-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}
