@@ -1,0 +1,100 @@
+.material-rename,
+.material-rename-form,
+.material-rename-field,
+.material-rename-review {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.material-rename > button {
+  justify-self: start;
+}
+
+.material-rename-form {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.material-rename-field {
+  gap: 8px;
+}
+
+.material-rename-field > label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.material-rename-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+.material-rename-field input:disabled {
+  background: #f4f5fb;
+  color: var(--muted);
+}
+
+.material-rename-field input[aria-invalid="true"] {
+  border-color: #c34c69;
+}
+
+.material-rename-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.material-rename button,
+.material-rename p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.material-rename-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.material-rename-comparison > div {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e0def4;
+  border-radius: 13px;
+  background: #f9f8ff;
+}
+
+.material-rename-comparison h4 {
+  font-size: 14px;
+}
+
+.material-rename-comparison p {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  .material-rename-form {
+    padding: 16px;
+  }
+
+  .material-rename-comparison {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .material-rename-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}

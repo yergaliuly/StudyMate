@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, FileText, RefreshCw, Search } from 'lucide-react';
+import { ArrowLeft, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
 
 import { subjectApi } from '../../services/subjectApi.js';
 import { materialApi } from '../../services/materialApi.js';
@@ -8,6 +8,7 @@ import { formatBytes } from '../../utils/formatBytes.js';
 import StorageUsage from './StorageUsage.jsx';
 import MaterialUploadForm from './MaterialUploadForm.jsx';
 import MaterialTextPanel, { processingLabels } from './MaterialTextPanel.jsx';
+import MaterialDeleteModal from './MaterialDeleteModal.jsx';
 import '../../styles/accountMaterials.css';
 
 const PAGE_SIZE = 20;
@@ -28,10 +29,14 @@ export default function AccountMaterials({
   const scope = useRef(stateRef.current).current;
   const record = useRef(scope.records[subjectId]).current;
   const [selectedMaterialId, setSelectedMaterialId] = useState(
-  record.selectedMaterialId ?? null,
+    record.selectedMaterialId ?? null,
+  );
+  const [selectedDeletionId, setSelectedDeletionId] = useState(
+    record.selectedDeletionId ?? null,
   );
   const materialOpenerRef = useRef(null);
   const materialSearchRef = useRef(null);
+  const deleteButtonsRef = useRef(new Map());
 
   const runtime = useRef({
     mounted: false,
@@ -78,8 +83,14 @@ export default function AccountMaterials({
   );
 
   const canUseMaterial = useCallback(
-  (id) => canUseMaterials() && record.selectedMaterialId === id,
-  [canUseMaterials, record],
+    (id) => canUseMaterials() && !record.selectedDeletionId
+      && record.selectedMaterialId === id,
+    [canUseMaterials, record],
+  );
+
+  const canDeleteMaterial = useCallback(
+    (id) => canUseMaterials() && record.selectedDeletionId === id,
+    [canUseMaterials, record],
   );
 
   useEffect(() => {
@@ -357,34 +368,67 @@ export default function AccountMaterials({
   }
 
   function openMaterial(id, button) {
-  if (!canUseMaterials()) return;
+    if (!canUseMaterials() || record.selectedDeletionId) return;
 
-  materialOpenerRef.current = button;
-  record.selectedMaterialId = id;
-  setSelectedMaterialId(id);
-}
+    materialOpenerRef.current = button;
+    record.selectedMaterialId = id;
+    setSelectedMaterialId(id);
+  }
 
-function closeMaterial() {
-  if (!canUseMaterials()) return;
+  function closeMaterial() {
+    if (!canUseMaterials()) return;
 
-  record.selectedMaterialId = null;
-  setSelectedMaterialId(null);
+    record.selectedMaterialId = null;
+    setSelectedMaterialId(null);
 
-  window.requestAnimationFrame(() => {
-    if (!canUseMaterials() || record.selectedMaterialId != null) return;
+    window.requestAnimationFrame(() => {
+      if (!canUseMaterials() || record.selectedMaterialId != null
+        || record.selectedDeletionId) return;
 
-    const button = materialOpenerRef.current;
-    if (button?.isConnected) button.focus();
-    else materialSearchRef.current?.focus();
-  });
-}
+      const button = materialOpenerRef.current;
+      if (button?.isConnected) button.focus();
+      else materialSearchRef.current?.focus();
+    });
+  }
+
+  function openDeletion(id) {
+    if (!canUseMaterials() || record.selectedDeletionId) return;
+
+    // Сразу закрываем доступ к прежним операциям, до размонтирования панели.
+    record.selectedMaterialId = null;
+    record.selectedDeletionId = id;
+    setSelectedMaterialId(null);
+    setSelectedDeletionId(id);
+  }
+
+  function closeDeletion() {
+    if (!canUseMaterials()) return;
+    const id = record.selectedDeletionId;
+    record.selectedDeletionId = null;
+    setSelectedDeletionId(null);
+
+    window.requestAnimationFrame(() => {
+      if (!canUseMaterials() || record.selectedDeletionId) return;
+      const button = deleteButtonsRef.current.get(id);
+      if (button?.isConnected) button.focus();
+      else materialSearchRef.current?.focus();
+    });
+  }
+
+  function handleMaterialRemoved() {
+    if (!canUseMaterials()) return;
+    // Квоту и счётчик предмета всегда читаем с сервера; поиск сохраняем.
+    setSubjectRevision((value) => value + 1);
+    setStorageRevision((value) => value + 1);
+    refreshList();
+  }
 
   function handleMaterialUploaded(uploaded) {
-  if (!canUseMaterials()) return;
+    if (!canUseMaterials()) return;
 
-  openMaterial(uploaded.id, null);
-  refreshMaterials();
-}
+    openMaterial(uploaded.id, null);
+    refreshMaterials();
+  }
 
   const totalPages = ready
     ? Math.max(1, Math.ceil(list.data.meta.total / list.data.meta.pageSize))
@@ -433,17 +477,17 @@ function closeMaterial() {
           </div>
 
           {selectedMaterialId && (
-          <MaterialTextPanel
-            key={selectedMaterialId}
-            materialId={selectedMaterialId}
-            subjectId={subjectId}
-            record={record}
-            canAct={canUseMaterial}
-            onClose={closeMaterial}
-            onAccessError={(error) => blockUpload('checking', error)}
-            onMaterialRead={refreshList}
-          />
-        )}
+            <MaterialTextPanel
+              key={selectedMaterialId}
+              materialId={selectedMaterialId}
+              subjectId={subjectId}
+              record={record}
+              canAct={canUseMaterial}
+              onClose={closeMaterial}
+              onAccessError={(error) => blockUpload('checking', error)}
+              onMaterialRead={refreshList}
+            />
+          )}
 
           <StorageUsage
             status={storage.status}
@@ -565,6 +609,20 @@ function closeMaterial() {
                     >
                       Обработка и текст
                     </button>
+                    <button
+                      ref={(button) => {
+                        if (button) deleteButtonsRef.current.set(material.id, button);
+                        else deleteButtonsRef.current.delete(material.id);
+                      }}
+                      type="button"
+                      className="secondary-button account-material-delete"
+                      aria-label={(material.status === 'deleting'
+                        ? 'Проверить удаление «' : 'Удалить материал «') + material.title + '»'}
+                      onClick={() => openDeletion(material.id)}
+                    >
+                      <Trash2 size={16} aria-hidden="true" />
+                      {material.status === 'deleting' ? 'Проверить удаление' : 'Удалить материал'}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -603,6 +661,21 @@ function closeMaterial() {
             </nav>
           )}
         </>
+      )}
+
+      {selectedDeletionId && canUseMaterials() && (
+        <MaterialDeleteModal
+          key={selectedDeletionId}
+          materialId={selectedDeletionId}
+          subjectId={subjectId}
+          record={record}
+          canAct={canDeleteMaterial}
+          onClose={closeDeletion}
+          onRead={refreshList}
+          onAccepted={refreshList}
+          onRemoved={handleMaterialRemoved}
+          onAccessError={(error) => blockUpload('checking', error)}
+        />
       )}
     </section>
   );

@@ -62,6 +62,9 @@ jobs:
           tests/materialProcessingAction.test.js
           tests/storageApi.test.js
           tests/materialApi.test.js
+          tests/materialDownloadAction.test.js
+          tests/materialRenameAction.test.js
+          tests/materialDeleteAction.test.js
           tests/materialUploadDraft.test.js
 
       - name: Build frontend

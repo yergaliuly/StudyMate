@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createMaterialTextReader } from "../../services/materialTextReader.js";
 import "../../styles/materialText.css";
 import MaterialProcessAction from './MaterialProcessAction.jsx';
+import MaterialDownloadAction from './MaterialDownloadAction.jsx';
+import MaterialRenameAction from './MaterialRenameAction.jsx';
 import {
   reconcileMaterialProcessing,
 } from '../../services/materialProcessingAction.js';
@@ -103,6 +105,11 @@ export default function MaterialTextPanel({
   }, [materialId, subjectId, record]);
 
   const refresh = () => readerRef.current?.refresh();
+  const handleRenamed = () => {
+    if (!canAct(materialId)) return;
+    headingRef.current?.focus({ preventScroll: true });
+    refresh();
+  };
   const readPage = (page) => {
     void readerRef.current?.readPage(page);
   };
@@ -174,6 +181,22 @@ export default function MaterialTextPanel({
             </p>
           ) : (
             <>
+              <MaterialDownloadAction
+                material={material}
+                canAct={canAct}
+                onAccessError={onAccessError}
+              />
+
+              <MaterialRenameAction
+                material={material}
+                subjectId={subjectId}
+                record={record}
+                canAct={canAct}
+                onRead={onMaterialRead}
+                onSaved={handleRenamed}
+                onAccessError={onAccessError}
+              />
+
               <p className="material-text-processing" role="status">
                 {processingLabels[processingStatus]}
               </p>
