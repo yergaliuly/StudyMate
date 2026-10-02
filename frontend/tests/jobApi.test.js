@@ -300,3 +300,23 @@ test('Неизвестный PDF-код отклоняется без повто
   );
   assert.equal(calls.length, 1);
 });
+
+test('Все три ошибки ИИ доступны для material.summary без запуска генерации', async () => {
+  for (const code of ['AI_UNAVAILABLE', 'AI_INVALID_RESPONSE', 'AI_OUTCOME_UNKNOWN']) {
+    const data = job('failed', {
+      type: 'material.summary', error: { code, message: 'Не удалось создать конспект.' },
+    });
+    const { api, calls } = setup(json({ data }));
+    assert.deepEqual(await api.getById(ID), data);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.method, 'GET');
+  }
+});
+
+test('Неизвестная ошибка ИИ отклоняется без автоматического повтора', async () => {
+  const { api, calls } = setup(json({ data: job('failed', {
+    type: 'material.summary', error: { code: 'AI_UNKNOWN', message: 'Ошибка' },
+  }) }));
+  await assert.rejects(() => api.getById(ID), errorIs('INVALID_RESPONSE', 200));
+  assert.equal(calls.length, 1);
+});

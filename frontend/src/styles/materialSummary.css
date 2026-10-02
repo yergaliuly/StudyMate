@@ -1,0 +1,135 @@
+.material-summary-panel {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  padding: 24px;
+  background: linear-gradient(145deg, #fff, #f7f8ff);
+}
+
+.material-summary-heading,
+.material-summary-actions,
+.material-summary-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.material-summary-heading h3:focus-visible {
+  outline: 3px solid #9185f7;
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+
+.material-summary-title,
+.material-summary-confirm-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.material-summary-hint {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.material-summary-empty,
+.material-summary-generate,
+.material-summary-saved {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.material-summary-empty > svg,
+.material-summary-status {
+  color: var(--primary);
+}
+
+.material-summary-status {
+  font-weight: 600;
+}
+
+.material-summary-generate {
+  justify-items: start;
+}
+
+.material-summary-saved {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.material-summary-meta {
+  justify-content: flex-start;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.material-summary-meta h4 {
+  margin-right: auto;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.material-summary-demo {
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: #fff4db;
+  color: #78520c;
+}
+
+.material-summary-content {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+.material-summary-confirm-title {
+  margin: 18px 0;
+}
+
+.material-summary-confirm .icon-tile {
+  background: #eeecff;
+  color: var(--primary);
+}
+
+.material-summary-notice {
+  display: grid;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.material-summary-confirm-actions {
+  margin-top: 24px;
+}
+
+@media (max-width: 640px) {
+  .material-summary-panel {
+    padding: 20px;
+  }
+
+  .material-summary-saved {
+    padding: 16px;
+  }
+
+  .material-summary-actions {
+    width: 100%;
+  }
+
+  .material-summary-actions button {
+    flex: 1 1 150px;
+    justify-content: center;
+  }
+
+  .material-summary-confirm-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}
