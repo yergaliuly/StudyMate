@@ -2,16 +2,14 @@ package com.studymate.summaries;
 
 import com.studymate.ai.AiFailure;
 import com.studymate.ai.SummaryProvider;
+import com.studymate.ai.SourceText;
 import com.studymate.jobs.JobError;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 /** Page-labelled, bounded calls. Every part of a long material is represented in the result. */
 final class SummaryGeneration {
-  private static final int CHUNK_CHARS = 100_000;
-  private static final int PART_CHARS = 80_000;
   private final SummaryProvider provider;
   SummaryGeneration(SummaryProvider provider) { this.provider = provider; }
 
@@ -54,25 +52,8 @@ final class SummaryGeneration {
     return new Result(content.toString().strip(), sources.stream().sorted().toList(), provider.model(), inputTokens, outputTokens);
   }
 
-  private static List<InputChunk> split(List<SourcePage> pages) {
-    List<InputChunk> result = new ArrayList<>();
-    StringBuilder current = new StringBuilder();
-    Set<Integer> refs = new LinkedHashSet<>();
-    for (SourcePage page : pages) {
-      if (page.number() < 1 || page.number() > 200 || page.text() == null) return List.of();
-      String text = page.text();
-      for (int offset = 0; offset < text.length();) {
-        int end = Math.min(text.length(), offset + PART_CHARS);
-        if (end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))) end--;
-        String block = "\nСтраница " + page.number() + ":\n" + text.substring(offset, end);
-        if (current.length() + block.length() > CHUNK_CHARS) {
-          result.add(new InputChunk(current.toString(), Set.copyOf(refs)));
-          current.setLength(0); refs.clear();
-        }
-        current.append(block); refs.add(page.number()); offset = end;
-      }
-    }
-    if (!current.isEmpty()) result.add(new InputChunk(current.toString(), Set.copyOf(refs)));
-    return result;
+  private static List<InputChunk> split(List<SourcePage> pages) throws AiFailure {
+    return SourceText.split(pages.stream().map(p -> new SourceText.Page(p.number(), p.text())).toList()).stream()
+        .map(c -> new InputChunk(c.text(), c.pages())).toList();
   }
 }
