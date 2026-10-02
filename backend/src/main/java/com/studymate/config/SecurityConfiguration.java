@@ -73,9 +73,11 @@ public class SecurityConfiguration {
             .requestMatchers(HttpMethod.DELETE, "/api/v1/subjects/*").authenticated()
             .requestMatchers(HttpMethod.GET, "/api/v1/jobs/*").authenticated()
             .requestMatchers(HttpMethod.GET, "/api/v1/materials", "/api/v1/materials/*",
-                "/api/v1/materials/*/download", "/api/v1/materials/*/pages", "/api/v1/storage/usage").authenticated()
-            .requestMatchers(HttpMethod.POST, "/api/v1/materials", "/api/v1/materials/*/process").authenticated()
-            .requestMatchers(HttpMethod.PATCH, "/api/v1/materials/*").authenticated()
+                "/api/v1/materials/*/download", "/api/v1/materials/*/pages",
+                "/api/v1/materials/*/summary", "/api/v1/storage/usage").authenticated()
+            .requestMatchers(HttpMethod.POST, "/api/v1/materials", "/api/v1/materials/*/process",
+                "/api/v1/materials/*/summary").authenticated()
+            .requestMatchers(HttpMethod.PATCH, "/api/v1/materials/*", "/api/v1/materials/*/summary").authenticated()
             .requestMatchers(HttpMethod.DELETE, "/api/v1/materials/*").authenticated()
             .anyRequest().denyAll())
         .securityContext(context -> context.securityContextRepository(contexts))

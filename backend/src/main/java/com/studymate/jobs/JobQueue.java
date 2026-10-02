@@ -23,7 +23,13 @@ public class JobQueue {
 
   @Transactional(timeout = 10)
   public UUID enqueue(UUID owner, String kind, UUID operationKey, JsonNode payload, RetryPolicy policy) {
+    return enqueue(owner, kind, operationKey, payload, policy, settings.executionTimeoutSeconds());
+  }
+
+  @Transactional(timeout = 10)
+  public UUID enqueue(UUID owner, String kind, UUID operationKey, JsonNode payload, RetryPolicy policy, int timeoutSeconds) {
     Objects.requireNonNull(owner); Objects.requireNonNull(operationKey); Objects.requireNonNull(policy);
+    if (timeoutSeconds < settings.leaseSeconds() || timeoutSeconds > 3600) throw new IllegalArgumentException("Invalid job timeout");
     if (kind == null || !kind.matches("[a-z][a-z0-9_.-]{0,79}") || payload == null || !payload.isObject()) {
       throw new IllegalArgumentException("Invalid internal job request");
     }
@@ -31,7 +37,7 @@ public class JobQueue {
     if (json.getBytes(StandardCharsets.UTF_8).length > 16384) {
       throw new IllegalArgumentException("Job payload exceeds 16 KiB; store references, not documents");
     }
-    var inserted = jobs.insert(owner, kind, operationKey, json, policy, settings);
+    var inserted = jobs.insert(owner, kind, operationKey, json, policy, settings, timeoutSeconds);
     if (inserted.isPresent()) return inserted.get();
     // Separate statement sees the winning insert after a concurrent ON CONFLICT wait.
     var existing = jobs.existing(owner, kind, operationKey, json, policy);

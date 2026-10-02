@@ -15,7 +15,10 @@ public enum JobError {
   PDF_TIMEOUT("Извлечение текста превысило 60 секунд."),
   PDF_RESOURCE_LIMIT("PDF требует больше памяти, чем разрешено обработчику."),
   PDF_WORKER_FAILED("Обработчик PDF завершился без корректного результата."),
-  PDF_ORIGINAL_MISMATCH("Сохранённый оригинал не прошёл проверку целостности.");
+  PDF_ORIGINAL_MISMATCH("Сохранённый оригинал не прошёл проверку целостности."),
+  AI_UNAVAILABLE("Сервис генерации временно недоступен."),
+  AI_INVALID_RESPONSE("Не удалось проверить ответ ИИ. Конспект не сохранён."),
+  AI_OUTCOME_UNKNOWN("Результат платного вызова неизвестен. Автоматический повтор отключён.");
 
   private final String message;
   JobError(String message) { this.message = message; }

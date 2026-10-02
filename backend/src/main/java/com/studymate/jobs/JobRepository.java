@@ -16,7 +16,7 @@ class JobRepository {
   private final JsonMapper mapper;
   JobRepository(JdbcClient jdbc, JsonMapper mapper) { this.jdbc = jdbc; this.mapper = mapper; }
 
-  Optional<UUID> insert(UUID owner, String kind, UUID key, String payload, RetryPolicy policy, JobProperties settings) {
+  Optional<UUID> insert(UUID owner, String kind, UUID key, String payload, RetryPolicy policy, JobProperties settings, int timeoutSeconds) {
     return jdbc.sql("""
         INSERT INTO studymate.jobs (id, owner_id, kind, operation_key, payload, retry_policy,
             max_attempts, retry_delay_seconds, max_retry_delay_seconds, lease_seconds, execution_timeout_seconds)
@@ -27,7 +27,7 @@ class JobRepository {
         .param("payload", payload).param("policy", policy.name())
         .param("attempts", policy == RetryPolicy.MANUAL ? 1 : settings.maxAttempts())
         .param("delay", settings.retryDelaySeconds()).param("maxDelay", settings.maxRetryDelaySeconds())
-        .param("lease", settings.leaseSeconds()).param("timeout", settings.executionTimeoutSeconds())
+        .param("lease", settings.leaseSeconds()).param("timeout", timeoutSeconds)
         .query(UUID.class).optional();
   }
 
