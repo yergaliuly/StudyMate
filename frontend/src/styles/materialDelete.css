@@ -1,0 +1,60 @@
+.material-delete-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.material-delete-file {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff, #f4f3ff);
+  overflow-wrap: anywhere;
+}
+
+.material-delete-file > p:last-child,
+.material-delete-hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.material-delete-warning {
+  margin-top: 18px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.material-delete-state {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.material-delete-state h3 {
+  margin-bottom: 6px;
+  font-size: 16px;
+}
+
+.material-delete-actions {
+  margin-top: 24px;
+}
+
+.account-material-card .account-material-delete {
+  color: #a33852;
+}
+
+@media (max-width: 640px) {
+  .material-delete-modal {
+    padding: 22px;
+  }
+
+  .material-delete-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}
