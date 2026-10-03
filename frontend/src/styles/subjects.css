@@ -147,3 +147,9 @@
     padding: 22px 18px;
   }
 }
+
+@media (max-width: 380px) {
+  .account-subject-form .subject-color-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
