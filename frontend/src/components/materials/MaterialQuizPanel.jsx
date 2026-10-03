@@ -110,6 +110,7 @@ function QuizMeta({ quiz }) {
 
 export default function MaterialQuizPanel({
   materialId, subjectId, record, canAct, onClose, onAccessError, onMaterialRead,
+  attemptRecord, onOpenHistory,
 }) {
   const id = useId();
   const headingRef = useRef(null);
@@ -216,6 +217,10 @@ export default function MaterialQuizPanel({
         </div>
       </div>
       {state.material && <p className="material-quiz-title">{state.material.title}</p>}
+      {state.material?.status === 'stored' && onOpenHistory && <div className="material-quiz-actions">
+        <button type="button" className="secondary-button"
+          onClick={() => onOpenHistory({ materialId }, { materialTitle: state.material.title })}>История материала</button>
+      </div>}
       {busy && <p className="material-quiz-hint" role="status">
         {state.pending ? 'Отправляем запрос…' : 'Проверяем состояние тестов…'}
       </p>}
@@ -315,9 +320,13 @@ export default function MaterialQuizPanel({
         {detailRemaining > 0 && <p className="material-quiz-hint" role="status">Загрузка теста доступна через {detailRemaining} сек.</p>}
         {quiz && state.quizStatus === 'ready' && <>
           <QuizMeta quiz={quiz} />
+          {onOpenHistory && <div className="material-quiz-actions">
+            <button type="button" className="secondary-button"
+              onClick={() => onOpenHistory({ materialId, quizId: quiz.id }, { materialTitle: state.material.title, quizVersion: quiz.version })}>История этой версии</button>
+          </div>}
           <p className="material-quiz-hint">В каждом вопросе 4 варианта ответа. Вопросы подготовлены ИИ — сверь важные факты с материалом.</p>
           <QuizAttemptPanel key={quiz.id} quiz={quiz} materialId={materialId} subjectId={subjectId}
-            record={record} onAccessError={(error) => callbacks.current.onAccessError(error)}
+            record={attemptRecord ?? record} onAccessError={(error) => callbacks.current.onAccessError(error)}
             canAct={() => {
               const current = record.quiz?.[materialId.toLowerCase()];
               return callbacks.current.canAct(materialId) && current?.view.material?.status === 'stored'

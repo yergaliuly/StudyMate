@@ -1,0 +1,200 @@
+.attempt-history,
+.attempt-history-controls,
+.attempt-history-list,
+.attempt-history-card,
+.attempt-history-empty {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.attempt-history-controls,
+.attempt-history-card,
+.attempt-history-empty,
+.attempt-history-message,
+.attempt-history-pagination {
+  padding: 24px;
+}
+
+.attempt-history-controls {
+  background: linear-gradient(145deg, #fff, #f7f8ff);
+}
+
+.attempt-history h2,
+.attempt-history h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.attempt-history h2 {
+  font-size: 22px;
+}
+
+.attempt-history-card h3 {
+  font-size: 18px;
+}
+
+.attempt-history-heading,
+.attempt-history-filters,
+.attempt-history-meta,
+.attempt-history-actions,
+.attempt-history-context,
+.attempt-history-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.attempt-history-heading,
+.attempt-history-pagination {
+  justify-content: space-between;
+}
+
+.attempt-history-heading > h3 {
+  flex: 1 1 220px;
+}
+
+.attempt-history-status-filter {
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.attempt-history-status-filter select {
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 34px 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+.attempt-history-status-filter select:focus-visible {
+  outline: 3px solid #9185f7;
+  outline-offset: 3px;
+}
+
+.attempt-history-filters {
+  align-items: flex-end;
+}
+
+.attempt-history-context > span {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #eeecff;
+  color: var(--primary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.attempt-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attempt-history-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attempt-history-status.status-completed {
+  color: #21724e;
+  background: #eef9f3;
+}
+
+.attempt-history-status.status-in_progress {
+  color: #78520c;
+  background: #fff4db;
+}
+
+.attempt-history-meta {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.attempt-history-score {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--primary);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.attempt-history-score > span {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.attempt-history-empty {
+  justify-items: start;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.attempt-history-empty > svg {
+  color: var(--primary);
+}
+
+.attempt-history-empty h3 {
+  color: var(--text);
+}
+
+.attempt-history-message {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.attempt-history button,
+.attempt-history p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.attempt-history [tabindex="-1"] {
+  scroll-margin-top: 100px;
+}
+
+.attempt-history [tabindex="-1"]:focus-visible {
+  outline: 3px solid #9185f7;
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+
+@media (max-width: 640px) {
+  .attempt-history-controls,
+  .attempt-history-card,
+  .attempt-history-empty,
+  .attempt-history-message,
+  .attempt-history-pagination {
+    padding: 20px;
+  }
+
+  .attempt-history-actions,
+  .attempt-history-filters,
+  .attempt-history-status-filter {
+    width: 100%;
+  }
+
+  .attempt-history-actions > button {
+    flex: 1 1 160px;
+    justify-content: center;
+  }
+}

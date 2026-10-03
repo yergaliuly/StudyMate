@@ -49,7 +49,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function setup({ record = {}, materialReads = [], starts = [], submissions = [], reads = [], keys = [KEY], onChange, quizValue = quiz() } = {}) {
+function setup({ record = {}, materialReads = [], starts = [], submissions = [], reads = [], keys = [KEY], onChange, quizValue = quiz(), existingAttemptId = null } = {}) {
   let allowed = true;
   let timestamp = 1000;
   let keyCount = 0;
@@ -62,7 +62,7 @@ function setup({ record = {}, materialReads = [], starts = [], submissions = [],
     return await response;
   }
   const controller = createQuizAttemptController({
-    record, quiz: quizValue, materialId: MATERIAL, subjectId: SUBJECT,
+    record, quiz: quizValue, materialId: MATERIAL, subjectId: SUBJECT, existingAttemptId,
     canAct: () => allowed, now: () => timestamp,
     makeKey: () => { keyCount += 1; return keys.shift(); },
     onChange: (state) => { states.push(state); onChange?.(state); },
@@ -79,7 +79,7 @@ function setup({ record = {}, materialReads = [], starts = [], submissions = [],
   });
   return {
     controller, record, calls, states, access,
-    get state() { return getQuizAttemptState(record, QUIZ); },
+    get state() { return getQuizAttemptState(record, QUIZ, existingAttemptId); },
     get starts() { return calls.filter((call) => call.kind === 'start'); },
     get submissions() { return calls.filter((call) => call.kind === 'submit'); },
     get reads() { return calls.filter((call) => call.kind === 'read'); },
@@ -582,4 +582,136 @@ test('Синхронное закрытие из callback confirmed success не
   assert.equal(s.state.frozen, false);
   assert.equal(s.state.attemptId, ATTEMPT);
   assert.equal(s.state.attempt, null);
+});
+
+test('История читает известную попытку после reload и не создаёт новый проход даже прямым start', async () => {
+  const s = setup({ existingAttemptId: ATTEMPT });
+  await s.controller.refresh();
+  assert.deepEqual(s.calls.map((call) => call.kind), ['read']);
+  assert.equal(s.state.canChoose, true);
+  assert.deepEqual(s.state.answers, blank());
+  await s.controller.start();
+  assert.equal(s.keyCount, 0);
+  s.controller.choose(answer().questionId, answer().optionId);
+  await s.controller.submit();
+  assert.equal(s.state.phase, 'completed');
+  assert.equal(s.state.canStart, false);
+  await s.controller.start();
+  assert.equal(s.starts.length, 0);
+});
+
+test('Переход материала в историю той же попытки сохраняет выбор и неизвестную отправку', async () => {
+  const record = {};
+  const materialView = setup({ record, submissions: [failure('NETWORK_ERROR')] });
+  await materialView.controller.start();
+  materialView.controller.choose(answer().questionId, answer().optionId);
+  await materialView.controller.submit();
+  materialView.controller.stop();
+  const history = setup({ record, existingAttemptId: ATTEMPT });
+  await history.controller.refresh();
+  assert.equal(history.state.frozen, true);
+  assert.equal(history.state.canChoose, false);
+  assert.deepEqual(history.state.answers[0], answer());
+  await history.controller.submit();
+  assert.deepEqual(history.submissions[0].answers, materialView.submissions[0].answers);
+  history.controller.stop();
+  const restored = setup({ record, reads: [completed([answer()])] });
+  await restored.controller.refresh();
+  assert.equal(restored.state.phase, 'completed');
+  assert.equal(restored.starts.length, 0);
+});
+
+test('Две незавершённые попытки одной версии хранят независимые ответы', async () => {
+  const record = {};
+  const first = setup({ record, existingAttemptId: ATTEMPT });
+  await first.controller.refresh();
+  first.controller.choose(answer().questionId, answer().optionId);
+  first.controller.stop();
+  const second = setup({ record, existingAttemptId: NEXT_ATTEMPT });
+  await second.controller.refresh();
+  assert.deepEqual(second.state.answers, blank());
+  second.controller.choose(answer(1, 2).questionId, answer(1, 2).optionId);
+  second.controller.stop();
+  const reopened = setup({ record, existingAttemptId: ATTEMPT });
+  await reopened.controller.refresh();
+  assert.deepEqual(reopened.state.answers[0], answer());
+  assert.equal(reopened.state.answers[1].optionId, null);
+});
+
+test('Новый проход материала сохраняет старую завершённую попытку отдельно от нового черновика', async () => {
+  const record = {};
+  const s = setup({ record, keys: [KEY, KEY2], starts: [attempt(), attempt({ id: NEXT_ATTEMPT })] });
+  await s.controller.start();
+  s.controller.choose(answer().questionId, answer().optionId);
+  await s.controller.submit();
+  await s.controller.start();
+  s.controller.choose(answer(1, 2).questionId, answer(1, 2).optionId);
+  s.controller.stop();
+  const history = setup({ record, existingAttemptId: ATTEMPT, reads: [completed([answer()])] });
+  await history.controller.refresh();
+  assert.equal(history.state.attempt.scorePercent, 10);
+  assert.deepEqual(history.state.answers[0], answer());
+  history.controller.stop();
+  const current = setup({ record, reads: [attempt({ id: NEXT_ATTEMPT })] });
+  await current.controller.refresh();
+  assert.equal(current.state.attemptId, NEXT_ATTEMPT);
+  assert.equal(current.state.answers[0].optionId, null);
+  assert.deepEqual(current.state.answers[1], answer(1, 2));
+});
+
+test('Неизвестная отправка отдельной исторической попытки не меняет выбранный проход материала', async () => {
+  const record = {};
+  const materialView = setup({ record });
+  await materialView.controller.start();
+  materialView.controller.choose(answer().questionId, answer().optionId);
+  materialView.controller.stop();
+  const historical = setup({ record, existingAttemptId: NEXT_ATTEMPT, submissions: [failure('NETWORK_ERROR')] });
+  await historical.controller.refresh();
+  historical.controller.choose(answer(2, 2).questionId, answer(2, 2).optionId);
+  await historical.controller.submit();
+  historical.controller.stop();
+  const current = setup({ record });
+  await current.controller.refresh();
+  assert.equal(current.state.attemptId, ATTEMPT);
+  assert.equal(current.state.frozen, false);
+  assert.deepEqual(current.state.answers[0], answer());
+  assert.equal(current.state.answers[2].optionId, null);
+});
+
+test('Replay неизвестного start принимает уже открытый history draft без потери замороженных ответов', async () => {
+  const record = {};
+  const first = setup({ record, starts: [failure('NETWORK_ERROR')] });
+  await first.controller.start();
+  first.controller.stop();
+  const history = setup({ record, existingAttemptId: ATTEMPT, submissions: [failure('NETWORK_ERROR')] });
+  await history.controller.refresh();
+  history.controller.choose(answer().questionId, answer().optionId);
+  await history.controller.submit();
+  history.controller.stop();
+  const replay = setup({ record });
+  await replay.controller.start();
+  assert.equal(replay.starts[0].idempotencyKey, KEY);
+  assert.deepEqual(replay.state.answers[0], answer());
+  assert.equal(replay.state.frozen, true);
+  assert.equal(replay.state.submitUncertain, true);
+  assert.equal(replay.state.canChoose, false);
+  await replay.controller.submit();
+  assert.deepEqual(replay.submissions[0].answers, history.submissions[0].answers);
+});
+
+test('Replay неизвестного start не регрессирует результат, уже подтверждённый через историю', async () => {
+  const record = {};
+  const first = setup({ record, starts: [failure('NETWORK_ERROR')] });
+  await first.controller.start();
+  first.controller.stop();
+  const history = setup({ record, existingAttemptId: ATTEMPT, reads: [completed([answer()])] });
+  await history.controller.refresh();
+  history.controller.stop();
+  const replay = setup({ record, starts: [attempt(), completed([answer()])] });
+  await replay.controller.start();
+  assert.equal(replay.state.attempt, null);
+  assert.equal(replay.state.canChoose, false);
+  await replay.controller.start();
+  assert.equal(replay.state.phase, 'completed');
+  assert.equal(replay.state.attempt.correctCount, 1);
 });

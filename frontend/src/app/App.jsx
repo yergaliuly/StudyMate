@@ -59,6 +59,8 @@ export default function App() {
   const subjectDraftRef = useRef(null);
   const subjectDetailRef = useRef(null);
   const materialsRef = useRef(null);
+  const resultsRef = useRef(null);
+  const attemptsRef = useRef(null);
   const draftOwnerRef = useRef(null);
   const recoveringAccessRef = useRef(false);
 
@@ -67,6 +69,8 @@ export default function App() {
       subjectDraftRef.current = null;
       subjectDetailRef.current = null;
       materialsRef.current = null;
+      resultsRef.current = null;
+      attemptsRef.current = null;
       draftOwnerRef.current = user.id;
       recoveringAccessRef.current = false;
     }
@@ -151,6 +155,8 @@ export default function App() {
     subjectDraftRef.current = null;
     subjectDetailRef.current = null;
     materialsRef.current = null;
+    resultsRef.current = null;
+    attemptsRef.current = null;
     draftOwnerRef.current = null;
     recoveringAccessRef.current = false;
     setAuthMessage('');
@@ -294,6 +300,8 @@ export default function App() {
               draftRef={subjectDraftRef}
               detailRef={subjectDetailRef}
               materialsRef={materialsRef}
+              resultsRef={resultsRef}
+              attemptsRef={attemptsRef}
               onAccessError={handleAccountAccessError}
               onAccessRestored={handleAccountAccessRestored}
             />

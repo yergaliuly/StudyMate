@@ -39,16 +39,31 @@ function emptyView() {
   };
 }
 
-function entry(record, id) {
-  if (!record || typeof record !== 'object' || typeof id !== 'string' || !UUID.test(id)) {
-    throw new TypeError('Нужны запись предмета и UUID теста.');
-  }
-  record.quizAttempts ??= {};
-  record.quizAttempts[id.toLowerCase()] ??= {
-    attemptId: null, answers: [], frozenAnswers: null, startAttempt: null, usedKeys: [], completion: null,
+function newDraft(attemptId = null) {
+  return {
+    attemptId, answers: [], frozenAnswers: null, startAttempt: null, usedKeys: [], completion: null,
     submitUncertain: false, unavailable: false, retryAt: 0, operation: null,
     view: emptyView(),
   };
+}
+
+function entry(record, id, existingAttemptId = null) {
+  if (!record || typeof record !== 'object' || typeof id !== 'string' || !UUID.test(id)) {
+    throw new TypeError('Нужны запись предмета и UUID теста.');
+  }
+  if (existingAttemptId !== null && (typeof existingAttemptId !== 'string' || !UUID.test(existingAttemptId))) {
+    throw new TypeError('Нужен UUID существующей попытки.');
+  }
+  record.quizAttempts ??= {};
+  record.attemptDrafts ??= {};
+  if (existingAttemptId) {
+    const key = existingAttemptId.toLowerCase();
+    const current = record.quizAttempts[id.toLowerCase()];
+    record.attemptDrafts[key] ??= sameId(current?.attemptId, existingAttemptId)
+      ? current : newDraft(existingAttemptId);
+    return record.attemptDrafts[key];
+  }
+  record.quizAttempts[id.toLowerCase()] ??= newDraft();
   return record.quizAttempts[id.toLowerCase()];
 }
 
@@ -61,12 +76,13 @@ function snapshot(draft) {
   };
 }
 
-export function getQuizAttemptState(record, quizId) {
-  return snapshot(entry(record, quizId));
+export function getQuizAttemptState(record, quizId, existingAttemptId = null) {
+  return snapshot(entry(record, quizId, existingAttemptId));
 }
 
 export function createQuizAttemptController({
   record, quiz, materialId, subjectId, canAct, onChange, onAccessError,
+  existingAttemptId = null,
   api = attemptApi, materials = materialApi, now = Date.now,
   makeKey = () => globalThis.crypto.randomUUID(),
 }) {
@@ -80,14 +96,16 @@ export function createQuizAttemptController({
   const quizVersion = quiz.version;
   const questions = copyQuestions(quiz.questions);
   const blankAnswers = () => questions.map(({ id }) => ({ questionId: id, optionId: null }));
-  const draft = entry(record, quizId);
+  const draft = entry(record, quizId, existingAttemptId);
   if (!draft.answers.length) draft.answers = blankAnswers();
   let stopped = false;
   let request = null;
   let epoch = 0;
   let verified = false;
 
-  const owns = () => record.quizAttempts?.[quizId.toLowerCase()] === draft;
+  const owns = () => existingAttemptId
+    ? record.attemptDrafts?.[existingAttemptId.toLowerCase()] === draft
+    : record.quizAttempts?.[quizId.toLowerCase()] === draft;
   const active = () => !stopped && owns() && canAct(quizId);
   const busy = () => request || draft.operation || draft.view.pending || draft.view.reading;
   const waiting = () => now() < draft.retryAt;
@@ -97,9 +115,9 @@ export function createQuizAttemptController({
     const idle = !draft.view.pending && !draft.view.reading && !draft.unavailable;
     const current = idle && verified && draft.view.attempt;
     return {
-      canStart: Boolean(idle && !unresolvedStart()
+      canStart: Boolean(!existingAttemptId && idle && !unresolvedStart()
         && (!draft.attemptId || (current && draft.view.attempt.status === 'completed'))),
-      canRetryStart: Boolean(idle && unresolvedStart() && !draft.startAttempt.blocked),
+      canRetryStart: Boolean(!existingAttemptId && idle && unresolvedStart() && !draft.startAttempt.blocked),
       canChoose: Boolean(current && draft.view.attempt.status === 'in_progress' && !draft.frozenAnswers),
       canSubmit: Boolean(current && draft.view.attempt.status === 'in_progress' && !draft.frozenAnswers),
       canRetrySubmit: Boolean(current && draft.view.attempt.status === 'in_progress' && draft.frozenAnswers),
@@ -160,12 +178,14 @@ export function createQuizAttemptController({
             && questions[index].options.some((option) => sameId(option.id, item.correctOptionId))
             && Array.isArray(item.sourcePages)));
     if (!valid) return false;
-    const completion = draft.completion;
+    const known = record.attemptDrafts?.[value.id.toLowerCase()];
+    const completedDraft = draft.completion ? draft : known;
+    const completion = completedDraft?.completion;
     return !completion || !sameId(completion.id, value.id)
       || (value.status === 'completed' && value.startedAt === completion.startedAt
         && value.completedAt === completion.completedAt && value.correctCount === completion.correctCount
         && value.scorePercent === completion.scorePercent
-        && sameAnswers(value.review.map(({ questionId, selectedOptionId }) => ({ questionId, optionId: selectedOptionId })), draft.answers));
+        && sameAnswers(value.review.map(({ questionId, selectedOptionId }) => ({ questionId, optionId: selectedOptionId })), completedDraft.answers));
   }
 
   function normalizedAnswers(value) {
@@ -192,17 +212,31 @@ export function createQuizAttemptController({
   }
 
   function accept(value, operation) {
+    const known = record.attemptDrafts[value.id.toLowerCase()];
+    // An unresolved start may already be visible in history. Its replay must
+    // preserve answers and a frozen submission created through that view.
+    if (known && known !== draft) {
+      Object.assign(draft, {
+        answers: copyAnswers(known.answers),
+        frozenAnswers: known.frozenAnswers ? copyAnswers(known.frozenAnswers) : null,
+        submitUncertain: known.submitUncertain,
+        completion: known.completion ? { ...known.completion } : null,
+        retryAt: Math.max(draft.retryAt, known.retryAt),
+      });
+    }
     operation.submitted = false;
     release(operation);
     verified = true;
     if (draft.startAttempt) Object.assign(draft.startAttempt, { resolved: true, uncertain: false, blocked: false });
     const completed = value.status === 'completed';
+    record.attemptDrafts[value.id.toLowerCase()] = draft;
     publish({
       phase: value.status, attempt: copyAttempt(value), pending: false, reading: false,
       message: completed ? 'Результат попытки сохранён.'
         : draft.frozenAnswers ? 'Попытка ещё не завершена. Можно повторить отправку только сохранённых ответов.' : '',
     }, {
-      attemptId: value.id, unavailable: false, retryAt: 0,
+      attemptId: value.id, unavailable: false,
+      retryAt: value.status === 'completed' ? 0 : draft.retryAt,
       ...(completed ? {
         completion: {
           id: value.id, startedAt: value.startedAt, completedAt: value.completedAt,
@@ -288,6 +322,17 @@ export function createQuizAttemptController({
       if (!unresolvedStart()) {
         const key = makeKey();
         if (typeof key !== 'string' || !UUID.test(key) || draft.usedKeys.some((used) => sameId(used, key))) throw invalidResponse();
+        // The current quiz slot can begin another run. Keep the previous run's
+        // state addressable by its own ID, without sharing answers or locks.
+        if (draft.attemptId) {
+          record.attemptDrafts[draft.attemptId.toLowerCase()] = {
+            ...draft, answers: copyAnswers(draft.answers),
+            frozenAnswers: draft.frozenAnswers ? copyAnswers(draft.frozenAnswers) : null,
+            startAttempt: draft.startAttempt ? { ...draft.startAttempt } : null,
+            completion: draft.completion ? { ...draft.completion } : null,
+            usedKeys: [...draft.usedKeys], operation: null, view: emptyView(),
+          };
+        }
         draft.usedKeys.push(key);
         draft.startAttempt = { key, resolved: false, uncertain: false, blocked: false };
         draft.attemptId = null;
