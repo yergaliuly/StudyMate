@@ -24,6 +24,8 @@ const statusLabels = {
 export default function AccountMaterials({
   subjectId,
   stateRef,
+  attemptRecord,
+  onOpenHistory,
   onBack,
   onAccessError,
   onAccessRestored,
@@ -587,6 +589,8 @@ export default function AccountMaterials({
               materialId={selectedQuizMaterialId}
               subjectId={subjectId}
               record={record}
+              attemptRecord={attemptRecord}
+              onOpenHistory={onOpenHistory}
               canAct={canUseQuizzes}
               onClose={closeQuizzes}
               onAccessError={(error) => blockUpload('checking', error)}

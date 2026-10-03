@@ -91,9 +91,9 @@ function invoke(api, method, options = {}) {
   return api.getById(ID, options);
 }
 
-test('Создание адаптера не отправляет запросов и предоставляет только start/submit/getById', () => {
+test('Создание адаптера не отправляет запросов и предоставляет start/submit/getById/list', () => {
   const { api, calls } = setup();
-  assert.deepEqual(Object.keys(api).sort(), ['getById', 'start', 'submit']);
+  assert.deepEqual(Object.keys(api).sort(), ['getById', 'list', 'start', 'submit']);
   assert.equal(calls.length, 0);
 });
 
@@ -516,5 +516,258 @@ test('Abort до запроса исключает сеть, abort текуще�
       await assert.rejects(pending, errorIs('REQUEST_CANCELLED'));
       assert.equal(calls.length, preAbort ? 0 : 1);
     }
+  }
+});
+
+function info(changes = {}) {
+  const { questions, review, ...value } = attempt(changes);
+  return value;
+}
+
+function history(data = [info()], meta = {}) {
+  return { data, meta: { page: 1, pageSize: 20, total: data.length, ...meta } };
+}
+
+test('История: GET /attempts с defaults, cookie/signal без CSRF, ключа, тела и других запросов', async () => {
+  const payload = history();
+  const { api, calls } = setup(json(payload));
+  const controller = new AbortController();
+  assert.deepEqual(await api.list({ signal: controller.signal }), { attempts: payload.data, meta: payload.meta });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/v1/attempts?page=1&pageSize=20');
+  const options = calls[0].options;
+  assert.equal(options.method, 'GET');
+  assert.equal(options.credentials, 'include');
+  assert.equal(options.mode, 'same-origin');
+  assert.equal(options.cache, 'no-store');
+  assert.equal(options.signal, controller.signal);
+  assert.equal(options.body, undefined);
+  assert.equal(options.headers.has('X-CSRF-TOKEN'), false);
+  assert.equal(options.headers.has('Idempotency-Key'), false);
+  assert.equal(options.headers.has('Content-Type'), false);
+});
+
+test('История: фильтры объединяются, UUID case-insensitive; undefined не попадает в query', async () => {
+  const payload = history([info(completed())], { page: 2, pageSize: 1, total: 2 });
+  const state = setup(json(payload));
+  assert.deepEqual(await state.api.list({ page: 2, pageSize: 1,
+    materialId: MATERIAL_ID.toUpperCase(), quizId: QUIZ_ID.toUpperCase(), status: 'completed',
+    idempotencyKey: KEY, scorePercent: 100,
+  }), { attempts: payload.data, meta: payload.meta });
+  assert.equal(state.calls[0].url, '/api/v1/attempts?page=2&pageSize=1&materialId=' + MATERIAL_ID.toUpperCase()
+    + '&quizId=' + QUIZ_ID.toUpperCase() + '&status=completed');
+  const requests = [];
+  const api = createAttemptApi({ request: async (path, options) => {
+    requests.push({ path, options });
+    return { status: 200, ...history([]) };
+  } });
+  await api.list({ materialId: undefined, quizId: undefined, status: undefined });
+  assert.deepEqual(requests[0].options.query, { page: 1, pageSize: 20 });
+  assert.equal(requests[0].path, '/attempts');
+});
+
+test('История: пустой ответ допустим при любых валидных фильтрах, не превращается в 404', async () => {
+  for (const options of [undefined, {}, { materialId: OTHER_ID }, { quizId: OTHER_ID },
+    { materialId: MATERIAL_ID, quizId: OTHER_ID, status: 'in_progress' }, { status: 'completed' }]) {
+    const { api, calls } = setup(json(history([])));
+    assert.deepEqual(await api.list(options), { attempts: [], meta: { page: 1, pageSize: 20, total: 0 } });
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('История: только 10 публичных полей AttemptInfo и page/pageSize/total, без questions/review/ключей', async () => {
+  const publicInfo = info(completed(correctAnswers(3)));
+  const wire = { status: 200, ...history([{ ...completed(correctAnswers(3)), ownerId: OTHER_ID,
+    operationKey: KEY, answers: correctAnswers(3), correctOptionId: OTHER_ID, secret: 'private' }], { ownerId: OTHER_ID }) };
+  const api = createAttemptApi({ request: async () => wire });
+  const result = await api.list();
+  assert.deepEqual(result, { attempts: [publicInfo], meta: { page: 1, pageSize: 20, total: 1 } });
+  assert.equal(Object.keys(result.attempts[0]).length, 10);
+  result.attempts[0].scorePercent = 0;
+  result.attempts.pop();
+  result.meta.total = 0;
+  assert.equal(wire.data.length, 1);
+  assert.equal(wire.data[0].scorePercent, 30);
+  assert.equal(wire.meta.total, 1);
+});
+
+test('История: in_progress сохраняет null, completed допускает все баллы 0..100 и равные даты', async () => {
+  for (const data of [info(), info({ quizVersion: Number.MAX_SAFE_INTEGER }),
+    ...Array.from({ length: 11 }, (_, count) => info(completed(correctAnswers(count), { completedAt: STARTED })))]) {
+    const { api } = setup(json(history([data])));
+    assert.deepEqual((await api.list()).attempts, [data]);
+  }
+});
+
+test('История: startedAt DESC с точностью наносекунд, затем UUID DESC без зависимости от регистра', async () => {
+  for (const data of [
+    [info({ id: ID, startedAt: '2026-10-03T10:00:00.000000002Z' }),
+      info({ id: OTHER_ID, startedAt: '2026-10-03T10:00:00.000000001Z' })],
+    [info({ id: OTHER_ID.toUpperCase(), startedAt: '2026-10-03T10:00:00.1Z' }),
+      info({ id: ID, startedAt: '2026-10-03T10:00:00.100000000Z' })],
+    [info({ id: OTHER_ID, startedAt: '2026-10-03T10:00:00Z' }),
+      info({ id: ID.toUpperCase(), startedAt: '2026-10-03T10:00:00.000Z' })],
+  ]) {
+    const { api } = setup(json(history(data)));
+    assert.deepEqual((await api.list()).attempts, data);
+  }
+});
+
+test('История: неверный порядок по дате/наносекундам/UUID и повтор ID отклоняются', async () => {
+  for (const data of [
+    [info({ id: ID, startedAt: '2026-10-03T10:00:00.000000001Z' }),
+      info({ id: OTHER_ID, startedAt: '2026-10-03T10:00:00.000000002Z' })],
+    [info({ id: ID, startedAt: '2026-10-03T10:00:00Z' }),
+      info({ id: OTHER_ID, startedAt: '2026-10-03T10:00:01Z' })],
+    [info({ id: ID.toUpperCase() }), info({ id: OTHER_ID })],
+    [info({ id: ID }), info({ id: ID.toUpperCase(), startedAt: '2026-10-03T09:00:00Z' })],
+    [info({ id: ID, startedAt: '2026-10-03T10:00:00.000Z' }),
+      info({ id: OTHER_ID, startedAt: '2026-10-03T10:00:00Z' })],
+  ]) {
+    const { api, calls } = setup(json(history(data)));
+    await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE', 200));
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('История: пагинация допускает неполную/пустую последнюю страницу и безопасна на MAX_SAFE_INTEGER', async () => {
+  const lastPage = Math.ceil(Number.MAX_SAFE_INTEGER / 100);
+  const lastRows = Array.from({ length: 91 }, (_, index) => info({
+    id: String(91 - index).padStart(8, '0') + '-0000-4000-8000-000000000000',
+  }));
+  for (const payload of [
+    history([info()], { page: 2, pageSize: 2, total: 3 }),
+    history([], { page: 3, pageSize: 2, total: 3 }),
+    history([], { page: 1, pageSize: 100, total: 0 }),
+    history([], { page: Number.MAX_SAFE_INTEGER, pageSize: 100, total: Number.MAX_SAFE_INTEGER }),
+    history([info()], { page: Number.MAX_SAFE_INTEGER, pageSize: 1, total: Number.MAX_SAFE_INTEGER }),
+    history(lastRows, { page: lastPage, pageSize: 100, total: Number.MAX_SAFE_INTEGER }),
+    history([], { page: lastPage + 1, pageSize: 100, total: Number.MAX_SAFE_INTEGER }),
+  ]) {
+    const { api } = setup(json(payload));
+    assert.deepEqual(await api.list({ page: payload.meta.page, pageSize: payload.meta.pageSize }),
+      { attempts: payload.data, meta: payload.meta });
+  }
+});
+
+test('История: пустые/неверные filters и недопустимая пагинация отклоняются до HTTP', async () => {
+  const { api, calls } = setup();
+  for (const value of ['', null, {}, [], 1, MATERIAL_ID + '?extra=1', '../auth/me']) {
+    await assert.rejects(() => api.list({ materialId: value }), TypeError);
+    await assert.rejects(() => api.list({ quizId: value }), TypeError);
+  }
+  for (const value of ['', null, 'ready', 'COMPLETED', 'constructor', [], {}, 1]) {
+    await assert.rejects(() => api.list({ status: value }), TypeError);
+  }
+  for (const value of ['', null, '1', 0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(() => api.list({ page: value }), RangeError);
+    await assert.rejects(() => api.list({ pageSize: value }), RangeError);
+  }
+  await assert.rejects(() => api.list({ pageSize: 101 }), RangeError);
+  assert.equal(calls.length, 0);
+});
+
+test('История: каждое поле AttemptInfo обязательно, включая nullable score/time', async () => {
+  for (const fixture of [info(), info(completed())]) {
+    for (const field of Object.keys(fixture)) {
+      const data = { ...fixture };
+      delete data[field];
+      const { api } = setup(json(history([data])));
+      await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE', 200), field);
+    }
+  }
+});
+
+test('История: malformed Info и несогласованные status/score/server time отклоняются', async () => {
+  for (const data of [null, [],
+    info({ id: null }), info({ quizId: 'bad' }), info({ materialId: 'bad' }),
+    info({ quizVersion: 0 }), info({ quizVersion: 1.5 }), info({ quizVersion: '1' }),
+    info({ quizVersion: Number.MAX_SAFE_INTEGER + 1 }), info({ questionCount: 0 }), info({ questionCount: '10' }),
+    info({ status: 'queued' }), info({ status: null }), info({ startedAt: null }),
+    info({ startedAt: '2026-02-30T10:00:00Z' }), info({ startedAt: '2026-10-03T24:00:00Z' }),
+    info({ startedAt: '2026-10-03T10:00:00+00:00' }), info({ completedAt: FINISHED }),
+    info({ correctCount: 0 }), info({ scorePercent: 0 }),
+    info(completed([], { completedAt: null })), info(completed([], { correctCount: null })),
+    info(completed([], { scorePercent: null })), info(completed([], { correctCount: '0' })),
+    info(completed([], { correctCount: -1 })), info(completed([], { correctCount: 11 })),
+    info(completed([], { correctCount: 0.5 })), info(completed([], { scorePercent: '0' })),
+    info(completed([], { scorePercent: 0.01 })), info(completed([], { scorePercent: 101 })),
+    info(completed(correctAnswers(1), { scorePercent: 9.99 })),
+    info(completed([], { completedAt: '2026-10-03T10:00:00.123456788Z' })),
+  ]) {
+    const { api } = setup(json(history([data])));
+    await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE', 200));
+  }
+});
+
+test('История: response обязан соответствовать каждому заданному фильтру', async () => {
+  for (const filters of [{ materialId: OTHER_ID }, { quizId: OTHER_ID }, { status: 'completed' },
+    { materialId: MATERIAL_ID, quizId: OTHER_ID, status: 'in_progress' }]) {
+    const { api } = setup(json(history()));
+    await assert.rejects(() => api.list(filters), errorIs('INVALID_RESPONSE', 200));
+  }
+});
+
+test('История: meta должен совпадать с запросом и точным размером страницы', async () => {
+  for (const payload of [
+    { data: null, meta: history().meta }, { data: {}, meta: history().meta }, { data: [], meta: null },
+    history([info()], { page: 2 }), history([info()], { page: '1' }), history([info()], { pageSize: 1 }),
+    history([info()], { total: -1 }), history([info()], { total: '1' }), history([info()], { total: 0 }),
+    history([info()], { total: 1.5 }), history([info()], { total: Number.MAX_SAFE_INTEGER + 1 }),
+    history([info()], { total: 2 }), history([], { total: 1 }),
+  ]) {
+    const { api } = setup(json(payload));
+    await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE', 200));
+  }
+  for (const field of ['page', 'pageSize', 'total']) {
+    const payload = history();
+    delete payload.meta[field];
+    const { api } = setup(json(payload));
+    await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE', 200));
+  }
+  const { api } = setup(json(history([info()], { page: 3, pageSize: 1, total: 1 })));
+  await assert.rejects(() => api.list({ page: 3, pageSize: 1 }), errorIs('INVALID_RESPONSE', 200));
+});
+
+test('История: HTML, неверная оболочка или неожиданный успешный HTTP статус отклоняются', async () => {
+  for (const response of [
+    new Response('<html>Ошибка</html>', { status: 200 }), json({ result: history() }),
+    json(history(), 201), json(history(), 202), new Response(null, { status: 204 }),
+  ]) {
+    const { api, calls } = setup(response);
+    await assert.rejects(() => api.list(), errorIs('INVALID_RESPONSE'));
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('История: HTTP ошибки/Retry-After сохраняются без автоматического повторного чтения', async () => {
+  for (const [status, code] of [[400, 'INVALID_QUERY'], [401, 'AUTHENTICATION_REQUIRED'],
+    [403, 'CSRF_INVALID'], [429, 'RATE_LIMITED'], [503, 'SERVICE_UNAVAILABLE']]) {
+    const { api, calls } = setup(json({ error: { code, message: 'Ошибка', fieldErrors: {} } },
+      status, { 'Retry-After': '3' }));
+    await assert.rejects(() => api.list(), (error) => {
+      errorIs(code, status)(error);
+      assert.equal(error.retryAfterSeconds, 3);
+      return true;
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.method, 'GET');
+  }
+});
+
+test('История: сеть не вызывает повтор; отменённый до/во время GET запрос не продолжает чтение', async () => {
+  const network = setup(() => { throw new TypeError('Обрыв'); });
+  await assert.rejects(() => network.api.list(), errorIs('NETWORK_ERROR'));
+  assert.equal(network.calls.length, 1);
+  for (const preAbort of [false, true]) {
+    const controller = new AbortController();
+    const { api, calls } = setup((_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Отмена', 'AbortError')), { once: true });
+    }));
+    if (preAbort) controller.abort();
+    const pending = api.list({ signal: controller.signal });
+    if (!preAbort) controller.abort();
+    await assert.rejects(pending, errorIs('REQUEST_CANCELLED'));
+    assert.equal(calls.length, preAbort ? 0 : 1);
   }
 });

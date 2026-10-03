@@ -92,37 +92,78 @@ function readReview(data, questions, status) {
   });
 }
 
-function readAttempt(result, expected) {
-  const { data, status } = result;
-  if (status !== expected.status || !isRecord(data)
+function readInfo(data, status) {
+  if (!isRecord(data)
     || !isUuid(data.id) || !isUuid(data.quizId) || !isUuid(data.materialId)
-    || (expected.id && !sameId(data.id, expected.id))
-    || (expected.quizId && !sameId(data.quizId, expected.quizId))
     || !Number.isSafeInteger(data.quizVersion) || data.quizVersion < 1
-    || !STATUSES.has(data.status) || (expected.completed && data.status !== 'completed')
+    || !STATUSES.has(data.status)
     || data.questionCount !== 10 || !isTimestamp(data.startedAt)) throw invalidResponse(status);
-  const questions = readQuestions(data.questions, status);
-  let review = null;
   if (data.status === 'in_progress') {
     if (data.completedAt !== null || data.correctCount !== null
-      || data.scorePercent !== null || data.review !== null) throw invalidResponse(status);
+      || data.scorePercent !== null) throw invalidResponse(status);
   } else {
     if (!isTimestamp(data.completedAt) || timeKey(data.completedAt) < timeKey(data.startedAt)
       || !Number.isSafeInteger(data.correctCount) || data.correctCount < 0 || data.correctCount > 10
       || typeof data.scorePercent !== 'number' || data.scorePercent !== data.correctCount * 10) {
       throw invalidResponse(status);
     }
-    review = readReview(data.review, questions, status);
-    if (review.filter((item) => item.isCorrect).length !== data.correctCount) throw invalidResponse(status);
   }
-  // Только поля публичного DTO; текст остаётся точным, HTML не преобразуется.
   return {
     id: data.id, quizId: data.quizId, materialId: data.materialId,
     quizVersion: data.quizVersion, status: data.status, questionCount: data.questionCount,
     startedAt: data.startedAt, completedAt: data.completedAt,
     correctCount: data.correctCount, scorePercent: data.scorePercent,
-    questions, review,
   };
+}
+
+function readAttempt(result, expected) {
+  const { data, status } = result;
+  if (status !== expected.status) throw invalidResponse(status);
+  const info = readInfo(data, status);
+  if ((expected.id && !sameId(info.id, expected.id))
+    || (expected.quizId && !sameId(info.quizId, expected.quizId))
+    || (expected.completed && info.status !== 'completed')) throw invalidResponse(status);
+  const questions = readQuestions(data.questions, status);
+  let review = null;
+  if (info.status === 'in_progress') {
+    if (data.review !== null) throw invalidResponse(status);
+  } else {
+    review = readReview(data.review, questions, status);
+    if (review.filter((item) => item.isCorrect).length !== info.correctCount) throw invalidResponse(status);
+  }
+  // Только поля публичного DTO; текст остаётся точным, HTML не преобразуется.
+  return { ...info, questions, review };
+}
+
+function readList(result, filters) {
+  const { data, meta, status } = result;
+  if (status !== 200 || !Array.isArray(data) || !isRecord(meta)
+    || meta.page !== filters.page || meta.pageSize !== filters.pageSize
+    || !Number.isSafeInteger(meta.total) || meta.total < 0) throw invalidResponse(status);
+  // Offset умножаем только для страницы внутри total, поэтому результат остаётся безопасным целым.
+  const expectedLength = filters.page > Math.ceil(meta.total / filters.pageSize)
+    ? 0 : Math.min(filters.pageSize, meta.total - (filters.page - 1) * filters.pageSize);
+  if (data.length !== expectedLength) throw invalidResponse(status);
+  const ids = new Set();
+  let previousTime = null;
+  let previousId = null;
+  const attempts = Array.from(data, (item) => {
+    const info = readInfo(item, status);
+    const id = info.id.toLowerCase();
+    const time = timeKey(info.startedAt);
+    if (ids.has(id)
+      || (filters.materialId !== undefined && !sameId(info.materialId, filters.materialId))
+      || (filters.quizId !== undefined && !sameId(info.quizId, filters.quizId))
+      || (filters.status !== undefined && info.status !== filters.status)
+      || (previousTime !== null && (time > previousTime || (time === previousTime && id >= previousId)))) {
+      throw invalidResponse(status);
+    }
+    ids.add(id);
+    previousTime = time;
+    previousId = id;
+    return info;
+  });
+  return { attempts, meta: { page: filters.page, pageSize: filters.pageSize, total: meta.total } };
 }
 
 function normalizeAnswers(answers) {
@@ -180,8 +221,27 @@ export function createAttemptApi(client = apiClient) {
     }), { status: 200, id: attemptId });
   }
 
+  async function list({ page = 1, pageSize = 20, materialId, quizId, status, signal } = {}) {
+    if (!Number.isSafeInteger(page) || page < 1
+      || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new RangeError('Укажи положительную целую страницу и размер страницы от 1 до 100.');
+    }
+    if (materialId !== undefined) requireUuid(materialId, 'materialId');
+    if (quizId !== undefined) requireUuid(quizId, 'quizId');
+    if (status !== undefined && !STATUSES.has(status)) {
+      throw new TypeError('status должен быть in_progress или completed.');
+    }
+    const query = {
+      page, pageSize,
+      ...(materialId === undefined ? {} : { materialId }),
+      ...(quizId === undefined ? {} : { quizId }),
+      ...(status === undefined ? {} : { status }),
+    };
+    return readList(await client.request('/attempts', { method: 'GET', query, signal }), query);
+  }
+
   // Нет автоматических повторов, генерации ключей или обращения к jobs.
-  return { start, submit, getById };
+  return { start, submit, getById, list };
 }
 
 export const attemptApi = createAttemptApi();

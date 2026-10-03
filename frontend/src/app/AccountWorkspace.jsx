@@ -6,6 +6,8 @@ import Sidebar from '../components/layout/Sidebar.jsx';
 import AccountSubjects from '../components/subjects/AccountSubjects.jsx';
 import '../styles/account.css';
 import AccountMaterials from '../components/materials/AccountMaterials.jsx';
+import AccountResults from '../components/results/AccountResults.jsx';
+import { getAttemptHistoryState } from '../services/attemptHistoryController.js';
 
 const pageTitles = {
   dashboard: 'Мой кабинет',
@@ -36,15 +38,20 @@ export default function AccountWorkspace({
   draftRef,
   detailRef,
   materialsRef,
+  resultsRef,
+  attemptsRef,
   onAccessError,
   onAccessRestored,
 }) {
+  resultsRef.current ??= { active: false };
+  attemptsRef.current ??= {};
+  const attemptRecord = attemptsRef.current;
   const [materialSubjectId, setMaterialSubjectId] = useState(
   () => materialsRef.current?.selectedSubjectId ?? null,
 );
 
   const [activePage, setActivePage] = useState(
-  () => materialSubjectId ? 'subjects' : 'dashboard',
+  () => resultsRef.current.active ? 'results' : materialSubjectId ? 'subjects' : 'dashboard',
 );
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const headingRef = useRef(null);
@@ -61,6 +68,7 @@ export default function AccountWorkspace({
 }, [activePage, materialSubjectId]);
 
   function handleNavigate(page) {
+  resultsRef.current.active = page === 'results';
   if (materialsRef.current) {
     materialsRef.current.selectedSubjectId = null;
   }
@@ -71,6 +79,7 @@ export default function AccountWorkspace({
 }
 
 function openMaterials(id) {
+  resultsRef.current.active = false;
   const subjectId = id.toLowerCase();
 
   if (!materialsRef.current) {
@@ -97,6 +106,16 @@ function openMaterials(id) {
   setActivePage('subjects');
   closeMenu();
 }
+
+  function openHistory(filters, context = null) {
+    const history = resultsRef.current;
+    history.filterContext = context;
+    getAttemptHistoryState(history);
+    Object.assign(history.attemptHistory, {
+      filters: { ...filters }, page: 1, selectedAttemptId: null, selectedInfo: null,
+    });
+    handleNavigate('results');
+  }
 
   return (
     <div className="account-workspace">
@@ -170,6 +189,8 @@ function openMaterials(id) {
               key={materialSubjectId}
               subjectId={materialSubjectId}
               stateRef={materialsRef}
+              attemptRecord={attemptRecord}
+              onOpenHistory={openHistory}
               onBack={() => handleNavigate('subjects')}
               onAccessError={onAccessError}
               onAccessRestored={onAccessRestored}
@@ -179,6 +200,13 @@ function openMaterials(id) {
               draftRef={draftRef}
               detailRef={detailRef}
               onOpenMaterials={openMaterials}
+              onAccessError={onAccessError}
+              onAccessRestored={onAccessRestored}
+            />
+          ) : activePage === 'results' ? (
+            <AccountResults
+              stateRef={resultsRef}
+              attemptRecord={attemptRecord}
               onAccessError={onAccessError}
               onAccessRestored={onAccessRestored}
             />

@@ -72,6 +72,7 @@ jobs:
           tests/materialQuizController.test.js
           tests/attemptApi.test.js
           tests/quizAttemptController.test.js
+          tests/attemptHistoryController.test.js
           tests/materialUploadDraft.test.js
 
       - name: Build frontend

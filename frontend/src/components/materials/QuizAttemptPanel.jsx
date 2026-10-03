@@ -91,22 +91,26 @@ function AttemptReview({ attempt }) {
   </ol>;
 }
 
-export default function QuizAttemptPanel({ quiz, materialId, subjectId, record, canAct, onAccessError, children }) {
+export default function QuizAttemptPanel({
+  quiz, materialId, subjectId, record, canAct, onAccessError, children,
+  existingAttemptId = null, onCompleted, onUnavailable,
+}) {
   const id = useId();
   const controllerRef = useRef(null);
   const headingRef = useRef(null);
   const submitRef = useRef(null);
   const focusStamp = useRef(null);
+  const lastAttempt = useRef(null);
   const callbacks = useRef({});
-  callbacks.current = { canAct, onAccessError };
-  const [state, setState] = useState(() => getQuizAttemptState(record, quiz.id));
+  callbacks.current = { canAct, onAccessError, onCompleted, onUnavailable };
+  const [state, setState] = useState(() => getQuizAttemptState(record, quiz.id, existingAttemptId));
   const [confirmation, setConfirmation] = useState(null);
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
     let active = true;
     const controller = createQuizAttemptController({
-      record, quiz, materialId, subjectId,
+      record, quiz, materialId, subjectId, existingAttemptId,
       canAct: () => active && callbacks.current.canAct(),
       onAccessError: (error) => callbacks.current.onAccessError(error),
       onChange: (next) => { if (active) { setState(next); setNow(Date.now()); } },
@@ -119,7 +123,18 @@ export default function QuizAttemptPanel({ quiz, materialId, subjectId, record, 
       if (controllerRef.current === controller) controllerRef.current = null;
     };
     // The quiz is immutable; parent snapshots may change during generation polling.
-  }, [record, quiz.id, materialId, subjectId]);
+  }, [record, quiz.id, materialId, subjectId, existingAttemptId]);
+
+  useEffect(() => {
+    if (!callbacks.current.canAct()) return;
+    const previous = lastAttempt.current;
+    const current = state.attempt;
+    if (current) lastAttempt.current = { id: current.id, status: current.status };
+    if (current?.status === 'completed' && previous?.status === 'in_progress' && sameId(current.id, previous.id)) {
+      callbacks.current.onCompleted?.(current);
+    }
+    if (state.phase === 'unavailable') callbacks.current.onUnavailable?.();
+  }, [state.attempt, state.phase]);
 
   useEffect(() => {
     setNow(Date.now());
@@ -159,7 +174,7 @@ export default function QuizAttemptPanel({ quiz, materialId, subjectId, record, 
   const attempt = state.attempt;
   const completed = attempt?.status === 'completed';
   const inProgress = attempt?.status === 'in_progress';
-  const showStart = state.phase !== 'unavailable' && (!state.attemptId || completed);
+  const showStart = !existingAttemptId && state.phase !== 'unavailable' && (!state.attemptId || completed);
   const showSubmit = state.phase !== 'unavailable' && (inProgress || state.canRetrySubmit);
 
   function openConfirmation() {
