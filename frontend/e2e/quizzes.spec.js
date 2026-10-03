@@ -296,7 +296,8 @@ test('Тесты: версии DESC, пагинация и безопасный 
   }
   await expect(detail(page).locator('img, script, input, select, textarea')).toHaveCount(0);
   await expect(detail(page).getByRole('radio')).toHaveCount(0);
-  await expect(detail(page).getByRole('button', { name: /отправить|завершить|ответить|начать/i })).toHaveCount(0);
+  await expect(detail(page).getByRole('button', { name: /отправить|завершить|ответить/i })).toHaveCount(0);
+  await expect(detail(page).getByRole('button', { name: 'Начать тест', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => Boolean(window.quizExecuted))).toBe(false);
   await expect(detail(page)).not.toContainText(/правильный ответ|объяснение ответа/i);
   expect(await detail(page).innerHTML()).not.toContain('PRIVATE_');

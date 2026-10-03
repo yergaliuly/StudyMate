@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ClipboardList, Eye, RefreshCw, Sparkles, X } from 'lucide-react';
+import QuizAttemptPanel from './QuizAttemptPanel.jsx';
 import {
   createMaterialQuizController,
   getMaterialQuizState,
@@ -312,9 +313,17 @@ export default function MaterialQuizPanel({
           type="button" className="secondary-button" disabled={detailRemaining > 0}
           onClick={() => { void controllerRef.current?.openQuiz(state.selectedQuizId); }}>Повторить загрузку теста</button>}
         {detailRemaining > 0 && <p className="material-quiz-hint" role="status">Загрузка теста доступна через {detailRemaining} сек.</p>}
-        {quiz && <>
+        {quiz && state.quizStatus === 'ready' && <>
           <QuizMeta quiz={quiz} />
           <p className="material-quiz-hint">В каждом вопросе 4 варианта ответа. Вопросы подготовлены ИИ — сверь важные факты с материалом.</p>
+          <QuizAttemptPanel key={quiz.id} quiz={quiz} materialId={materialId} subjectId={subjectId}
+            record={record} onAccessError={(error) => callbacks.current.onAccessError(error)}
+            canAct={() => {
+              const current = record.quiz?.[materialId.toLowerCase()];
+              return callbacks.current.canAct(materialId) && current?.view.material?.status === 'stored'
+                && current.view.quizStatus === 'ready'
+                && current.selectedQuizId?.toLowerCase() === quiz.id.toLowerCase();
+            }}>
           <ol className="material-quiz-questions" aria-label="Вопросы теста">
             {quiz.questions.map((question) => <li key={question.id} className="material-quiz-question">
               <h5><span>Вопрос {question.position}</span>{question.text}</h5>
@@ -326,6 +335,7 @@ export default function MaterialQuizPanel({
               </ol>
             </li>)}
           </ol>
+          </QuizAttemptPanel>
         </>}
       </section>}
 
