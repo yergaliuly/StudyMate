@@ -52,6 +52,7 @@ export function createApiClient({
 
   let csrf = null;
   let csrfVersion = 0;
+  let csrfRefresh = null;
 
   function clearCsrf() {
     csrf = null;
@@ -247,18 +248,24 @@ export function createApiClient({
     }
   }
 
-  async function refreshCsrf({ signal } = {}) {
-    clearCsrf();
-
-    const version = csrfVersion;
-    const { data } = await request('/auth/csrf', { signal });
-
+  function checkCsrfVersion(version) {
     if (version !== csrfVersion) {
       throw new ApiError(
         'Результат обновления CSRF уже не актуален.',
         { code: 'CSRF_REFRESH_SUPERSEDED' },
       );
     }
+  }
+
+  async function loadCsrf(version, previous) {
+    // A superseded GET can still set a cookie. Drain its response before a
+    // replacement GET, even when the earlier caller has stopped waiting.
+    if (previous) await previous.catch(() => {});
+    checkCsrfVersion(version);
+
+    // A caller's abort must not interrupt the shared cookie-establishing request.
+    const { data } = await request('/auth/csrf');
+    checkCsrfVersion(version);
 
     if (
       !isRecord(data) ||
@@ -278,6 +285,43 @@ export function createApiClient({
       headerName: data.headerName,
       token: data.token,
     };
+  }
+
+  async function refreshCsrf({ signal } = {}) {
+    if (signal?.aborted) {
+      throw new ApiError('Запрос отменён.', { code: 'REQUEST_CANCELLED' });
+    }
+
+    if (!csrfRefresh || csrfRefresh.version !== csrfVersion) {
+      const previous = csrfRefresh?.promise;
+      clearCsrf();
+      const flight = { version: csrfVersion, promise: null };
+      csrfRefresh = flight;
+      flight.promise = loadCsrf(flight.version, previous).finally(() => {
+        if (csrfRefresh === flight) csrfRefresh = null;
+      });
+    }
+
+    const pending = csrfRefresh.promise;
+    if (!signal) return pending;
+
+    // Cancel this caller promptly without cancelling other callers or starting
+    // another anonymous session (including React StrictMode's second effect).
+    return new Promise((resolve, reject) => {
+      const finish = (complete, value) => {
+        signal.removeEventListener('abort', cancel);
+        complete(value);
+      };
+      const cancel = () => finish(reject,
+        new ApiError('Запрос отменён.', { code: 'REQUEST_CANCELLED' }));
+
+      signal.addEventListener('abort', cancel, { once: true });
+      pending.then(
+        () => { if (signal.aborted) cancel(); else finish(resolve); },
+        (error) => { if (signal.aborted) cancel(); else finish(reject, error); },
+      );
+      if (signal.aborted) cancel();
+    });
   }
 
   return {

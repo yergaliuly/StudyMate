@@ -83,3 +83,6 @@ jobs:
 
       - name: Run browser tests
         run: npx playwright test
+
+      - name: Check CSRF initialization in Vite dev StrictMode
+        run: npx playwright test --config playwright.dev.config.js
