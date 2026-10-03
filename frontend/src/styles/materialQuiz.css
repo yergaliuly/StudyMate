@@ -1,0 +1,230 @@
+.material-quiz-panel {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  padding: 24px;
+  background: linear-gradient(145deg, #fff, #f7f8ff);
+}
+
+.material-quiz-panel h4,
+.material-quiz-panel h5 {
+  margin: 0;
+}
+
+.material-quiz-heading,
+.material-quiz-actions,
+.material-quiz-meta,
+.material-quiz-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.material-quiz-heading h3,
+.material-quiz-heading h4 {
+  scroll-margin-top: 100px;
+}
+
+.material-quiz-heading h3:focus-visible,
+.material-quiz-heading h4:focus-visible {
+  outline: 3px solid #9185f7;
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+
+.material-quiz-panel button,
+.material-quiz-panel p,
+.material-quiz-confirm-title {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.material-quiz-title,
+.material-quiz-confirm-title,
+.material-quiz-status {
+  font-weight: 600;
+}
+
+.material-quiz-hint {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.material-quiz-empty,
+.material-quiz-generate,
+.material-quiz-versions,
+.material-quiz-preview,
+.material-quiz-result {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.material-quiz-empty > svg,
+.material-quiz-status {
+  color: var(--primary);
+}
+
+.material-quiz-generate,
+.material-quiz-result {
+  justify-items: start;
+}
+
+.material-quiz-version-list,
+.material-quiz-questions,
+.material-quiz-options {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.material-quiz-version,
+.material-quiz-preview {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.material-quiz-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.material-quiz-version > div {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.material-quiz-version h5,
+.material-quiz-preview h4 {
+  font-size: 16px;
+}
+
+.material-quiz-meta {
+  justify-content: flex-start;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.material-quiz-demo {
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: #fff4db;
+  color: #78520c;
+}
+
+.material-quiz-question {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #e0def4;
+  border-radius: 13px;
+  background: #f9f8ff;
+  min-width: 0;
+}
+
+.material-quiz-question h5 {
+  display: grid;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.material-quiz-question h5 > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.material-quiz-options {
+  gap: 8px;
+}
+
+.material-quiz-options > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  line-height: 1.65;
+}
+
+.material-quiz-options > li > span:last-child {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.material-quiz-option-marker {
+  display: grid;
+  place-items: center;
+  flex: 0 0 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: #eeecff;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.material-quiz-confirm-title {
+  margin: 18px 0;
+}
+
+.material-quiz-confirm .icon-tile {
+  background: #eeecff;
+  color: var(--primary);
+}
+
+.material-quiz-notice {
+  display: grid;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.material-quiz-confirm-actions {
+  margin-top: 24px;
+}
+
+@media (max-width: 640px) {
+  .material-quiz-panel {
+    padding: 20px;
+  }
+
+  .material-quiz-version,
+  .material-quiz-preview,
+  .material-quiz-question {
+    padding: 16px;
+  }
+
+  .material-quiz-actions {
+    width: 100%;
+  }
+
+  .material-quiz-actions > button,
+  .material-quiz-version > button {
+    flex: 1 1 150px;
+    justify-content: center;
+  }
+
+  .material-quiz-confirm-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}

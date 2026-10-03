@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, ClipboardList, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
 
 import { subjectApi } from '../../services/subjectApi.js';
 import { materialApi } from '../../services/materialApi.js';
@@ -10,6 +10,7 @@ import MaterialUploadForm from './MaterialUploadForm.jsx';
 import MaterialTextPanel, { processingLabels } from './MaterialTextPanel.jsx';
 import MaterialDeleteModal from './MaterialDeleteModal.jsx';
 import MaterialSummaryPanel from './MaterialSummaryPanel.jsx';
+import MaterialQuizPanel from './MaterialQuizPanel.jsx';
 import '../../styles/accountMaterials.css';
 
 const PAGE_SIZE = 20;
@@ -38,10 +39,14 @@ export default function AccountMaterials({
   const [selectedSummaryId, setSelectedSummaryId] = useState(
     record.selectedSummaryId ?? null,
   );
+  const [selectedQuizMaterialId, setSelectedQuizMaterialId] = useState(
+    record.selectedQuizMaterialId ?? null,
+  );
   const materialOpenerRef = useRef(null);
   const materialSearchRef = useRef(null);
   const deleteButtonsRef = useRef(new Map());
   const summaryButtonsRef = useRef(new Map());
+  const quizButtonsRef = useRef(new Map());
 
   const runtime = useRef({
     mounted: false,
@@ -89,7 +94,7 @@ export default function AccountMaterials({
 
   const canUseMaterial = useCallback(
     (id) => canUseMaterials() && !record.selectedDeletionId
-      && !record.selectedSummaryId && record.selectedMaterialId === id,
+      && !record.selectedSummaryId && !record.selectedQuizMaterialId && record.selectedMaterialId === id,
     [canUseMaterials, record],
   );
 
@@ -100,7 +105,13 @@ export default function AccountMaterials({
 
   const canUseSummary = useCallback(
     (id) => canUseMaterials() && !record.selectedDeletionId
-      && record.selectedSummaryId === id,
+      && !record.selectedQuizMaterialId && record.selectedSummaryId === id,
+    [canUseMaterials, record],
+  );
+
+  const canUseQuizzes = useCallback(
+    (id) => canUseMaterials() && !record.selectedDeletionId
+      && !record.selectedMaterialId && !record.selectedSummaryId && record.selectedQuizMaterialId === id,
     [canUseMaterials, record],
   );
 
@@ -382,7 +393,9 @@ export default function AccountMaterials({
     if (!canUseMaterials() || record.selectedDeletionId) return;
 
     record.selectedSummaryId = null;
+    record.selectedQuizMaterialId = null;
     setSelectedSummaryId(null);
+    setSelectedQuizMaterialId(null);
     materialOpenerRef.current = button;
     record.selectedMaterialId = id;
     setSelectedMaterialId(id);
@@ -396,7 +409,7 @@ export default function AccountMaterials({
 
     window.requestAnimationFrame(() => {
       if (!canUseMaterials() || record.selectedMaterialId != null
-        || record.selectedDeletionId || record.selectedSummaryId) return;
+        || record.selectedDeletionId || record.selectedSummaryId || record.selectedQuizMaterialId) return;
 
       const button = materialOpenerRef.current;
       if (button?.isConnected) button.focus();
@@ -407,8 +420,10 @@ export default function AccountMaterials({
   function openSummary(id) {
     if (!canUseMaterials() || record.selectedDeletionId) return;
     record.selectedMaterialId = null;
+    record.selectedQuizMaterialId = null;
     record.selectedSummaryId = id;
     setSelectedMaterialId(null);
+    setSelectedQuizMaterialId(null);
     setSelectedSummaryId(id);
   }
 
@@ -420,8 +435,32 @@ export default function AccountMaterials({
 
     window.requestAnimationFrame(() => {
       if (!canUseMaterials() || record.selectedSummaryId
-        || record.selectedDeletionId || record.selectedMaterialId) return;
+        || record.selectedDeletionId || record.selectedMaterialId || record.selectedQuizMaterialId) return;
       const button = summaryButtonsRef.current.get(id);
+      if (button?.isConnected) button.focus();
+      else materialSearchRef.current?.focus();
+    });
+  }
+
+  function openQuizzes(id) {
+    if (!canUseMaterials() || record.selectedDeletionId) return;
+    record.selectedMaterialId = null;
+    record.selectedSummaryId = null;
+    record.selectedQuizMaterialId = id;
+    setSelectedMaterialId(null);
+    setSelectedSummaryId(null);
+    setSelectedQuizMaterialId(id);
+  }
+
+  function closeQuizzes() {
+    if (!canUseMaterials()) return;
+    const id = record.selectedQuizMaterialId;
+    record.selectedQuizMaterialId = null;
+    setSelectedQuizMaterialId(null);
+    window.requestAnimationFrame(() => {
+      if (!canUseMaterials() || record.selectedQuizMaterialId
+        || record.selectedDeletionId || record.selectedMaterialId || record.selectedSummaryId) return;
+      const button = quizButtonsRef.current.get(id);
       if (button?.isConnected) button.focus();
       else materialSearchRef.current?.focus();
     });
@@ -433,9 +472,11 @@ export default function AccountMaterials({
     // Сразу закрываем доступ к прежним операциям, до размонтирования панели.
     record.selectedMaterialId = null;
     record.selectedSummaryId = null;
+    record.selectedQuizMaterialId = null;
     record.selectedDeletionId = id;
     setSelectedMaterialId(null);
     setSelectedSummaryId(null);
+    setSelectedQuizMaterialId(null);
     setSelectedDeletionId(id);
   }
 
@@ -535,6 +576,19 @@ export default function AccountMaterials({
               record={record}
               canAct={canUseSummary}
               onClose={closeSummary}
+              onAccessError={(error) => blockUpload('checking', error)}
+              onMaterialRead={refreshList}
+            />
+          )}
+
+          {selectedQuizMaterialId && (
+            <MaterialQuizPanel
+              key={selectedQuizMaterialId}
+              materialId={selectedQuizMaterialId}
+              subjectId={subjectId}
+              record={record}
+              canAct={canUseQuizzes}
+              onClose={closeQuizzes}
               onAccessError={(error) => blockUpload('checking', error)}
               onMaterialRead={refreshList}
             />
@@ -674,6 +728,21 @@ export default function AccountMaterials({
                     >
                       <BookOpen size={16} aria-hidden="true" />
                       Конспект
+                    </button>
+                    <button
+                      ref={(button) => {
+                        if (button) quizButtonsRef.current.set(material.id, button);
+                        else quizButtonsRef.current.delete(material.id);
+                      }}
+                      type="button"
+                      className="secondary-button"
+                      disabled={material.status !== 'stored'}
+                      aria-expanded={selectedQuizMaterialId === material.id}
+                      aria-label={'Открыть тесты «' + material.title + '»'}
+                      onClick={() => openQuizzes(material.id)}
+                    >
+                      <ClipboardList size={16} aria-hidden="true" />
+                      Тесты
                     </button>
                     <button
                       ref={(button) => {

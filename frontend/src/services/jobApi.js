@@ -29,6 +29,7 @@ const ERROR_CODES = new Set([
   'AI_UNAVAILABLE',
   'AI_INVALID_RESPONSE',
   'AI_OUTCOME_UNKNOWN',
+  'QUIZ_INSUFFICIENT_CONTENT',
 ]);
 
 function isRecord(value) {

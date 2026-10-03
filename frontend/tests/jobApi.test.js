@@ -320,3 +320,24 @@ test('Неизвестная ошибка ИИ отклоняется без а�
   await assert.rejects(() => api.getById(ID), errorIs('INVALID_RESPONSE', 200));
   assert.equal(calls.length, 1);
 });
+
+test('material.quiz возвращает отдельный quiz resultId и не подменяет его materialId', async () => {
+  const materialId = '3dfa4d7d-619d-4a97-9f09-a34d236e879b';
+  const data = job('succeeded', { type: 'material.quiz', maxAttempts: 1, resultId: OTHER_ID });
+  const { api, calls } = setup(json({ data: { ...data, materialId } }));
+  assert.deepEqual(await api.getById(ID), data);
+  assert.notEqual(data.resultId, materialId);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'GET');
+});
+
+test('material.quiz принимает QUIZ_INSUFFICIENT_CONTENT и отклоняет неизвестный QUIZ код', async () => {
+  const data = job('failed', { type: 'material.quiz', maxAttempts: 1,
+    error: { code: 'QUIZ_INSUFFICIENT_CONTENT', message: 'В материале недостаточно данных для 10 вопросов.' } });
+  const { api, calls } = setup(json({ data }));
+  assert.deepEqual(await api.getById(ID), data);
+  assert.equal(calls.length, 1);
+  const invalid = setup(json({ data: { ...data, error: { code: 'QUIZ_UNKNOWN', message: 'Ошибка' } } }));
+  await assert.rejects(() => invalid.api.getById(ID), errorIs('INVALID_RESPONSE', 200));
+  assert.equal(invalid.calls.length, 1);
+});
