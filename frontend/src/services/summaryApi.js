@@ -44,11 +44,15 @@ function isTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647;
 }
 
+export function isValidSummaryContent(value) {
+  return typeof value === 'string' && value.trim().length > 0
+    && value.length <= 100_000 && !INVALID_CONTENT.test(value);
+}
+
 function validSavedVersion(data) {
   if (
     !Number.isSafeInteger(data.version) || data.version < 1
-    || typeof data.content !== 'string' || !data.content.trim()
-    || data.content.length > 100_000 || INVALID_CONTENT.test(data.content)
+    || !isValidSummaryContent(data.content)
     || !isTimestamp(data.createdAt)
     || !Array.isArray(data.sourcePages) || data.sourcePages.length > 200
     || data.sourcePages.some((page, index, pages) => !Number.isSafeInteger(page)
@@ -132,7 +136,27 @@ export function createSummaryApi(client = apiClient) {
     return { materialId: data.materialId, jobId: data.jobId };
   }
 
-  return { getByMaterial, generate };
+  async function update(id, values, { version, signal } = {}) {
+    requireUuid(id, 'materialId');
+    if (!Number.isSafeInteger(version) || version < 1) {
+      throw new RangeError('version должна быть положительным безопасным целым числом.');
+    }
+    if (!isValidSummaryContent(values?.content)) {
+      throw new RangeError('Конспект должен содержать от 1 до 100 000 допустимых символов.');
+    }
+    const result = await client.request('/materials/' + id + '/summary', {
+      method: 'PATCH', body: { content: values.content, version }, signal,
+    });
+    const data = readSummary(result, id);
+    if (data.version !== version + 1 || data.origin !== 'user'
+      || !['ready', 'failed', 'cancelled'].includes(data.status)) {
+      throw invalidResponse(result.status);
+    }
+    // Сервер может убрать крайние пробелы; исходный черновик не нормализуем.
+    return data;
+  }
+
+  return { getByMaterial, generate, update };
 }
 
 export const summaryApi = createSummaryApi();

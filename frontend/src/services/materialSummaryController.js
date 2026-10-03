@@ -5,6 +5,11 @@ import { watchJob } from './jobWatcher.js';
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const SUMMARY_STATUSES = new Set(['queued', 'running', 'ready', 'failed', 'cancelled']);
 const JOB_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
+const isTerminalSummary = (value) => value && ['ready', 'failed', 'cancelled'].includes(value.status);
+const matchesBaseline = (value, baseline) => Boolean(value && baseline
+  && sameId(value.jobId, baseline.jobId) && value.version === baseline.version);
+const validExpected = (value) => typeof value?.jobId === 'string' && UUID.test(value.jobId)
+  && (value.version === null || (Number.isSafeInteger(value.version) && value.version >= 1));
 const sameId = (left, right) => typeof left === 'string'
   && left.toLowerCase() === right.toLowerCase();
 const invalidResponse = () => ({ status: 200, code: 'INVALID_RESPONSE' });
@@ -24,6 +29,7 @@ function emptyView() {
     phase: 'loading', material: null, summary: null, empty: false,
     pending: false, reading: false, watching: false, jobStatus: null,
     watchError: '', message: '', canGenerate: false, canRetry: false,
+    canRegenerate: false, canEdit: false, mutationUnresolved: false,
   };
 }
 
@@ -34,6 +40,8 @@ function entry(record, id) {
   record.summary ??= {};
   record.summary[id.toLowerCase()] ??= {
     key: null, acceptedJobId: null, seenSummary: false, blocked: false,
+    attemptKind: null, baseline: null, resolved: false, acceptedTerminal: false,
+    usedKeys: [],
     uncertain: false, retryAt: 0, operation: null, observation: null,
     view: emptyView(),
   };
@@ -81,6 +89,7 @@ export function createMaterialSummaryController({
   materialId,
   subjectId,
   canAct,
+  canMutate = () => true,
   onChange,
   onAccessError,
   onMaterialRead = () => {},
@@ -100,21 +109,36 @@ export function createMaterialSummaryController({
   let observation = null;
   let generation = 0;
   let eligible = false;
+  let fresh = false;
 
   const owns = () => record.summary?.[materialId.toLowerCase()] === draft;
   const active = () => !stopped && owns() && canAct(materialId);
   const inScope = (epoch) => active() && generation === epoch;
   const waiting = () => now() < draft.retryAt;
   const busy = () => request || draft.operation || draft.view.pending || draft.view.reading;
+  const unresolved = () => Boolean((draft.key || draft.acceptedJobId || draft.blocked) && !draft.resolved);
+  const retryMatches = () => draft.attemptKind === 'regenerate'
+    ? isTerminalSummary(draft.view.summary) && sameId(draft.view.summary.jobId, draft.baseline.jobId)
+    : draft.view.empty && !draft.view.summary;
 
   function publish(changes = {}, persistent = {}) {
     if (!active()) return;
     Object.assign(draft, persistent);
     Object.assign(draft.view, changes);
-    const allowed = eligible && !draft.blocked && !draft.seenSummary && !draft.acceptedJobId
-      && !draft.view.pending && !draft.view.reading && !draft.view.watching;
-    draft.view.canGenerate = Boolean(allowed && !draft.key);
-    draft.view.canRetry = Boolean(allowed && draft.key);
+    const idle = !draft.view.pending && !draft.view.reading && !draft.view.watching;
+    const readyText = draft.view.material?.status === 'stored'
+      && draft.view.material.processingStatus === 'ready';
+    const terminal = isTerminalSummary(draft.view.summary);
+    draft.view.mutationUnresolved = unresolved() || Boolean(draft.view.pending
+      || draft.view.watching || (draft.view.summary && !terminal));
+    draft.view.canGenerate = Boolean(fresh && eligible && idle && !draft.blocked
+      && !draft.seenSummary && !draft.key && !draft.acceptedJobId);
+    draft.view.canRetry = Boolean(fresh && readyText && idle && unresolved()
+      && draft.key && !draft.acceptedJobId && !draft.blocked && retryMatches());
+    draft.view.canRegenerate = Boolean(fresh && readyText && terminal && idle
+      && !unresolved() && !draft.view.watchError);
+    draft.view.canEdit = Boolean(fresh && terminal && draft.view.summary.version !== null
+      && idle && !unresolved() && !draft.view.watchError);
     onChange(snapshot(draft));
   }
 
@@ -146,6 +170,7 @@ export function createMaterialSummaryController({
 
   function unavailable() {
     eligible = false;
+    fresh = false;
     publish({
       phase: 'unavailable', material: null, summary: null, empty: false,
       pending: false, reading: false, watching: false,
@@ -176,7 +201,10 @@ export function createMaterialSummaryController({
         eligible = false;
       }
     }
-    if (access || missing || unavailableState) eligible = false;
+    if (access || missing || unavailableState) {
+      eligible = false;
+      fresh = false;
+    }
     publish({
       phase: access ? 'checking' : stage === 'watch' ? 'ready' : 'error',
       pending: false, reading: false, watching: false,
@@ -220,18 +248,45 @@ export function createMaterialSummaryController({
       if (!current()) return null;
       if (error?.status !== 404 || error.code !== 'SUMMARY_NOT_FOUND') throw error;
       eligible = draft.view.material?.processingStatus === 'ready';
-      publish({ summary: null, empty: !draft.acceptedJobId && !draft.seenSummary, jobStatus: null });
+      fresh = !draft.acceptedJobId && !draft.seenSummary;
+      publish({
+        summary: draft.view.summary?.version != null ? draft.view.summary : null,
+        empty: fresh,
+        jobStatus: null,
+      });
       return { absent: true };
     }
     if (!current()) return null;
     if (!sameId(value?.materialId, materialId) || typeof value.jobId !== 'string'
       || !UUID.test(value.jobId) || !SUMMARY_STATUSES.has(value.status)) throw invalidResponse();
+    const previousVersion = draft.view.summary?.version ?? draft.baseline?.version;
+    if (previousVersion !== null && previousVersion !== undefined
+      && (value.version === null || value.version < previousVersion)) throw invalidResponse();
     eligible = false;
+    fresh = true;
+    const reconciliation = {};
+    if (unresolved()) {
+      if (draft.acceptedJobId) {
+        const ownJob = sameId(value.jobId, draft.acceptedJobId);
+        const advanced = !draft.baseline || !sameId(value.jobId, draft.baseline.jobId);
+        if (isTerminalSummary(value) && (ownJob || (draft.acceptedTerminal && advanced))) {
+          Object.assign(reconciliation, { resolved: true, blocked: false, uncertain: false });
+        }
+      } else if (!draft.baseline || !sameId(value.jobId, draft.baseline.jobId)) {
+        // После потерянного POST новый job — основание наблюдать, а не посылать новый ключ.
+        Object.assign(reconciliation, {
+          acceptedJobId: value.jobId,
+          uncertain: false,
+          resolved: Boolean(isTerminalSummary(value)),
+          blocked: false,
+        });
+      }
+    }
     publish({
       summary: copySummary(value), empty: false,
       jobStatus: value.status === 'ready' ? 'succeeded' : value.status,
       message: summaryMessage(value),
-    }, { seenSummary: true, uncertain: false });
+    }, { seenSummary: true, ...reconciliation });
     return { summary: value };
   }
 
@@ -239,8 +294,10 @@ export function createMaterialSummaryController({
     if (!inScope(operation.epoch)) return;
     release(operation);
     const value = result?.summary;
-    const jobId = value && ['queued', 'running'].includes(value.status)
-      ? value.jobId : !value ? fallbackJobId : null;
+    const jobId = unresolved() && draft.acceptedJobId
+      ? draft.acceptedJobId
+      : value && ['queued', 'running'].includes(value.status)
+        ? value.jobId : !value && unresolved() ? fallbackJobId : null;
     const unconfirmed = jobId && terminalJobs.has(jobId.toLowerCase());
     publish({
       phase: 'ready', pending: false, reading: false,
@@ -250,6 +307,8 @@ export function createMaterialSummaryController({
         ? 'Задание завершилось, но состояние конспекта ещё не подтверждено. Обнови его позже.'
         : result?.absent && (draft.acceptedJobId || draft.seenSummary)
           ? 'Состояние ранее запущенного конспекта пока не подтверждено. Обнови его.'
+          : unresolved() && !draft.acceptedJobId
+            ? 'Результат попытки пока не подтверждён. Повтор использует прежний ключ операции.'
           : result?.absent && draft.view.material?.processingStatus !== 'ready'
             ? messages.TEXT_NOT_READY : draft.view.message,
     });
@@ -259,6 +318,7 @@ export function createMaterialSummaryController({
   async function loadSummaryOnly(fallbackJobId) {
     if (!active() || busy()) return;
     eligible = false;
+    fresh = false;
     const { operation, current } = start('summary');
     publish({ reading: true, watching: false, watchError: '' });
     try {
@@ -305,6 +365,10 @@ export function createMaterialSummaryController({
           if (!current()) return;
           if (['queued', 'running'].includes(job.status)) return;
           terminalJobs.add(jobId.toLowerCase());
+          if (sameId(jobId, draft.acceptedJobId ?? '')) {
+            publish({}, { acceptedTerminal: true });
+            if (!current()) return;
+          }
           haltWatch();
           publish({ watching: false });
           // У watcher уже отменён HTTP-сигнал; чтение использует новый контроллер.
@@ -328,6 +392,7 @@ export function createMaterialSummaryController({
   async function refresh() {
     if (!active() || busy() || waiting()) return;
     eligible = false;
+    fresh = false;
     terminalJobs.clear();
     const { operation, current } = start('read');
     publish({ phase: 'loading', reading: true, watching: false, watchError: '', message: '' });
@@ -342,27 +407,57 @@ export function createMaterialSummaryController({
     }
   }
 
-  async function generate() {
-    if (!active() || busy() || waiting() || (!draft.view.canGenerate && !draft.view.canRetry)
-      || draft.acceptedJobId || draft.seenSummary || draft.blocked) return;
+  async function submit(kind, expected = null, retry = false) {
     eligible = false;
+    fresh = false;
     const { operation, current } = start('generate');
     publish({ phase: 'loading', pending: true, reading: true, watching: false, watchError: '', message: '' });
     try {
       if (!current() || !await readMaterial(operation, current)) return;
       const before = await readSummary(operation, current);
       if (!current()) return;
-      if (!before?.absent || !eligible || draft.acceptedJobId || draft.seenSummary || draft.blocked) {
+      const readyText = draft.view.material?.processingStatus === 'ready';
+      const suitable = kind === 'regenerate'
+        ? isTerminalSummary(before?.summary) && matchesBaseline(before.summary, expected)
+        : before?.absent && eligible && !draft.seenSummary;
+      if (!readyText || !suitable || (retry && (!unresolved() || draft.acceptedJobId || draft.blocked))) {
         finish(operation, before);
+        if (inScope(operation.epoch) && kind === 'regenerate' && !suitable) publish({
+          message: 'Конспект изменился. Проверь актуальные данные и подтверди повторную генерацию заново.',
+        });
         return;
       }
-      if (!draft.key) {
+      if (!canMutate()) {
+        finish(operation, before);
+        if (inScope(operation.epoch)) publish({ message: 'Сначала заверши работу с правками конспекта.' });
+        return;
+      }
+      let previousAttempt;
+      if (!retry) {
         const key = makeKey();
-        if (typeof key !== 'string' || !UUID.test(key)) throw invalidResponse();
-        draft.key = key;
+        if (typeof key !== 'string' || !UUID.test(key)
+          || draft.usedKeys.some((used) => sameId(key, used))) throw invalidResponse();
+        previousAttempt = {
+          key: draft.key, attemptKind: draft.attemptKind, baseline: draft.baseline,
+          acceptedJobId: draft.acceptedJobId, acceptedTerminal: draft.acceptedTerminal,
+          resolved: draft.resolved, uncertain: draft.uncertain, blocked: draft.blocked,
+          usedKeys: [...draft.usedKeys],
+        };
+        Object.assign(draft, {
+          key, attemptKind: kind, baseline: kind === 'regenerate' ? { ...expected } : null,
+          acceptedJobId: null, acceptedTerminal: false, resolved: false,
+          uncertain: false, blocked: false,
+        });
+        draft.usedKeys.push(key);
       }
       publish({ reading: false });
       if (!current()) return;
+      if (!canMutate()) {
+        // Если редактор занял форму до отправки, платной попытки ещё не было.
+        if (previousAttempt) Object.assign(draft, previousAttempt);
+        finish(operation, before);
+        return;
+      }
       operation.submitted = true;
       const result = await api.generate(materialId, {
         idempotencyKey: draft.key,
@@ -370,12 +465,14 @@ export function createMaterialSummaryController({
       });
       if (!current()) return;
       if (!sameId(result?.materialId, materialId) || typeof result.jobId !== 'string'
-        || !UUID.test(result.jobId)) throw invalidResponse();
+        || !UUID.test(result.jobId)
+        || (kind === 'regenerate' && sameId(result.jobId, draft.baseline.jobId))) throw invalidResponse();
       operation.submitted = false;
       eligible = false;
       release(operation);
       publish({ phase: 'ready', pending: false, empty: false }, {
-        acceptedJobId: result.jobId, uncertain: false, retryAt: 0,
+        acceptedJobId: result.jobId, acceptedTerminal: false, resolved: false,
+        uncertain: false, retryAt: 0,
       });
       if (inScope(operation.epoch)) await loadSummaryOnly(result.jobId);
     } catch (error) {
@@ -389,6 +486,22 @@ export function createMaterialSummaryController({
     }
   }
 
+  async function generate(expected) {
+    if (!active() || busy() || waiting() || !canMutate()
+      || (!draft.view.canGenerate && !draft.view.canRetry)) return;
+    const retry = draft.view.canRetry;
+    const kind = retry ? draft.attemptKind ?? 'initial' : 'initial';
+    if (kind === 'regenerate' && !validExpected(expected)) return;
+    await submit(kind, kind === 'regenerate'
+      ? { jobId: expected.jobId, version: expected.version } : null, retry);
+  }
+
+  async function regenerate(expected) {
+    if (!active() || busy() || waiting() || !canMutate() || !draft.view.canRegenerate
+      || !validExpected(expected)) return;
+    await submit('regenerate', { jobId: expected.jobId, version: expected.version });
+  }
+
   function stop() {
     if (stopped) return;
     if (owns()) {
@@ -400,6 +513,7 @@ export function createMaterialSummaryController({
       draft.view = emptyView();
     }
     eligible = false;
+    fresh = false;
     stopped = true;
     generation += 1;
     request?.controller.abort();
@@ -407,5 +521,5 @@ export function createMaterialSummaryController({
     haltWatch();
   }
 
-  return { refresh, generate, stop };
+  return { refresh, generate, regenerate, stop };
 }

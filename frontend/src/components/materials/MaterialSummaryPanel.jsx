@@ -4,6 +4,8 @@ import {
   createMaterialSummaryController,
   getMaterialSummaryState,
 } from '../../services/materialSummaryController.js';
+import { getSummaryEditState } from '../../services/summaryEditAction.js';
+import SummaryEditAction from './SummaryEditAction.jsx';
 import '../../styles/materialSummary.css';
 
 const statusLabels = {
@@ -25,7 +27,7 @@ const errorMessages = {
   JOB_LEASE_EXPIRED: 'Обработчик перестал отвечать. Обнови состояние конспекта.',
 };
 
-function GenerationConfirmation({ material, retry, onClose, onConfirm }) {
+function GenerationConfirmation({ material, retry, regenerate, hasSaved, hasDraft, onClose, onConfirm }) {
   const id = useId();
   const dialogRef = useRef(null);
   const cancelRef = useRef(null);
@@ -61,7 +63,8 @@ function GenerationConfirmation({ material, retry, onClose, onConfirm }) {
           <X size={21} aria-hidden="true" />
         </button>
       </div>
-      <h2 id={id + '-heading'}>{retry ? 'Повторить запрос?' : 'Создать конспект?'}</h2>
+      <h2 id={id + '-heading'}>{retry ? 'Повторить запрос?'
+        : regenerate ? 'Создать конспект заново?' : 'Создать конспект?'}</h2>
       <p className="material-summary-confirm-title">«{material.title}»</p>
       <div id={id + '-notice'} className="material-summary-notice">
         <p>
@@ -70,6 +73,18 @@ function GenerationConfirmation({ material, retry, onClose, onConfirm }) {
         </p>
         <p>Проверь важные тезисы и ссылки на страницы по исходному PDF.</p>
         {retry && <p>Повтор относится к прежнему запросу. Уже созданное задание не запускается заново.</p>}
+        {retry && hasSaved && <p>
+          При успешном завершении этой генерации текущий сохранённый конспект будет заменён,
+          включая ручные правки. Перед повтором проверь показанную в панели версию.
+        </p>}
+        {regenerate && <p>
+          Это новая генерация по тексту PDF. При успехе она заменит сохранённый конспект,
+          включая ручные правки. До завершения и при ошибке прежняя версия останется доступной.
+        </p>}
+        {regenerate && hasDraft && <p>
+          Несохранённый черновик останется в редакторе. После генерации его можно будет
+          сравнить с новой версией; в генерации используется текст PDF.
+        </p>}
       </div>
       <div className="subject-form-actions material-summary-confirm-actions">
         <button ref={cancelRef} type="button" className="secondary-button" onClick={onClose}>Отмена</button>
@@ -83,7 +98,7 @@ function GenerationConfirmation({ material, retry, onClose, onConfirm }) {
           }}
         >
           <Sparkles size={17} aria-hidden="true" />
-          {retry ? 'Подтвердить повтор' : 'Подтвердить генерацию'}
+          {retry ? 'Подтвердить повтор' : regenerate ? 'Подтвердить новую генерацию' : 'Подтвердить генерацию'}
         </button>
       </div>
     </dialog>
@@ -107,6 +122,7 @@ export default function MaterialSummaryPanel({
   callbacks.current = { canAct, onAccessError, onMaterialRead };
 
   const [state, setState] = useState(() => getMaterialSummaryState(record, materialId));
+  const [editState, setEditState] = useState(() => getSummaryEditState(record, materialId));
   const [confirmation, setConfirmation] = useState(null);
   const [now, setNow] = useState(Date.now);
 
@@ -117,6 +133,10 @@ export default function MaterialSummaryPanel({
       materialId,
       subjectId,
       canAct: (value) => active && callbacks.current.canAct(value),
+      canMutate: () => {
+        const editor = getSummaryEditState(record, materialId);
+        return !editor.open && !editor.pending && !editor.reading && !editor.gate;
+      },
       onChange: (next) => {
         if (!active) return;
         setState(next);
@@ -157,6 +177,9 @@ export default function MaterialSummaryPanel({
   const status = state.jobStatus === 'succeeded' ? summary?.status : state.jobStatus || summary?.status;
   const readyText = state.material?.status === 'stored' && state.material.processingStatus === 'ready';
   const canRequest = state.canGenerate || state.canRetry;
+  const editBusy = editState.pending || editState.reading;
+  const editBlocksGeneration = editState.open || editBusy || Boolean(editState.gate);
+  const showRegenerate = Boolean(summary && state.material && !state.canRetry);
 
   function focusPanel() {
     window.requestAnimationFrame(() => {
@@ -181,7 +204,7 @@ export default function MaterialSummaryPanel({
           <button
             type="button"
             className="secondary-button"
-            disabled={busy || remaining > 0}
+            disabled={busy || editBusy || remaining > 0}
             onClick={() => { void controllerRef.current?.refresh(); }}
           >
             <RefreshCw size={16} aria-hidden="true" />
@@ -252,24 +275,55 @@ export default function MaterialSummaryPanel({
         </div>
       )}
 
+      {state.material?.status === 'stored' && (saved || editState.open || editState.content) && (
+        <SummaryEditAction
+          materialId={materialId}
+          subjectId={subjectId}
+          record={record}
+          canAct={canAct}
+          canWrite={() => getMaterialSummaryState(record, materialId).canEdit}
+          writeEnabled={state.canEdit}
+          onStateChange={setEditState}
+          onRead={() => { void controllerRef.current?.refresh(); }}
+          onSaved={() => {
+            void controllerRef.current?.refresh();
+            focusPanel();
+          }}
+          onAccessError={onAccessError}
+        />
+      )}
+
       {remaining > 0 && <p className="material-summary-hint" role="status">
         Повтор доступен через {remaining} сек.
       </p>}
 
-      {canRequest && state.material && (
+      {(canRequest || showRegenerate) && state.material && (
         <div className="material-summary-generate">
           <p className="material-summary-hint">
             Конспект создаётся по извлечённому тексту PDF. Перед отправкой покажем подтверждение.
           </p>
+          {editBlocksGeneration && <p className="material-summary-hint">
+            {editState.gate
+              ? 'Сначала проверь актуальный конспект в редакторе и выбери версию.'
+              : 'Сохрани изменения или скрой редактор перед новой генерацией. Черновик сохранится.'}
+          </p>}
           <button
             ref={generateRef}
             type="button"
             className="primary-button"
-            disabled={busy || remaining > 0}
-            onClick={() => setConfirmation({ retry: state.canRetry, material: state.material })}
+            disabled={busy || remaining > 0 || editBlocksGeneration
+              || (!canRequest && !state.canRegenerate)}
+            onClick={() => setConfirmation({
+              retry: state.canRetry,
+              regenerate: !canRequest,
+              material: state.material,
+              expected: summary ? { jobId: summary.jobId, version: summary.version } : null,
+              hasSaved: saved,
+              hasDraft: Boolean(editState.content && editState.content !== summary?.content),
+            })}
           >
             <Sparkles size={17} aria-hidden="true" />
-            {state.canRetry ? 'Повторить запрос' : 'Создать конспект'}
+            {state.canRetry ? 'Повторить запрос' : showRegenerate ? 'Создать заново' : 'Создать конспект'}
           </button>
         </div>
       )}
@@ -278,10 +332,16 @@ export default function MaterialSummaryPanel({
         <GenerationConfirmation
           material={confirmation.material}
           retry={confirmation.retry}
+          regenerate={confirmation.regenerate}
+          hasSaved={confirmation.hasSaved}
+          hasDraft={confirmation.hasDraft}
           onClose={closeConfirmation}
           onConfirm={() => {
             setConfirmation(null);
-            if (callbacks.current.canAct(materialId)) void controllerRef.current?.generate();
+            if (callbacks.current.canAct(materialId)) {
+              if (confirmation.regenerate) void controllerRef.current?.regenerate(confirmation.expected);
+              else void controllerRef.current?.generate(confirmation.expected);
+            }
             focusPanel();
           }}
         />

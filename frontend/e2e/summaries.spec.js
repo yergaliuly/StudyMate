@@ -29,6 +29,8 @@ const MATERIAL_ID = 'f73de5ee-311e-45cb-b7e2-000000000001';
 const SECOND_MATERIAL_ID = 'f73de5ee-311e-45cb-b7e2-000000000002';
 const PROCESS_JOB = '84971941-cc75-4e13-9e67-000000000001';
 const SUMMARY_JOB = 'b6fc0911-af70-4cbb-8a9b-000000000001';
+const SUMMARY_JOB_2 = 'b6fc0911-af70-4cbb-8a9b-000000000002';
+const SUMMARY_JOB_3 = 'b6fc0911-af70-4cbb-8a9b-000000000003';
 const SOURCE_CONTENT = 'Основной тезис лекции (стр. 1)\n\nПодробное объяснение второго тезиса (стр. 2).';
 const states = new WeakMap();
 
@@ -106,11 +108,11 @@ function reply(route, data, status = 200) {
   return route.fulfill({ status, json: { data } });
 }
 
-function fail(route, status, code, headers = {}) {
+function fail(route, status, code, headers = {}, fieldErrors = {}) {
   return route.fulfill({
     status,
     headers,
-    json: { error: { code, message: 'Внутренние подробности сервера.', fieldErrors: {} } },
+    json: { error: { code, message: 'Внутренние подробности сервера.', fieldErrors } },
   });
 }
 
@@ -123,6 +125,11 @@ function listReply(route, data, total = data.length) {
 }
 
 function account(page) { return page.locator('#account-main-content'); }
+async function captureSummaryPage(page, testInfo, fileName) {
+  // Full-page capture positions fixed navigation at the current scroll offset.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: testInfo.outputPath(fileName), fullPage: true });
+}
 function materials(page) { return page.getByRole('region', { name: 'Файлы предмета', exact: true }); }
 function summaryPanel(page) { return page.getByRole('region', { name: 'Конспект материала', exact: true }); }
 function consent(page, retry = false) {
@@ -148,6 +155,9 @@ async function mockSummaries(page, options = {}) {
     materialGets: [],
     jobGets: [],
     posts: [],
+    patches: [],
+    generationJobs: new Map(),
+    nextSummaryJob: options.summary ? 2 : 1,
     writes: [],
     requests: [],
     csrfCount: 0,
@@ -156,6 +166,7 @@ async function mockSummaries(page, options = {}) {
     onMaterial: null,
     onSummaryGet: null,
     onSummaryPost: null,
+    onSummaryPatch: null,
     onJob: null,
     ...options,
   };
@@ -212,8 +223,30 @@ async function mockSummaries(page, options = {}) {
       state.posts.push({ id, key: request.headers()['idempotency-key'], headers: request.headers(), body: request.postData() });
       if (state.onSummaryPost) await state.onSummaryPost(route, id);
       else {
-        state.summary = summary('queued', { materialId: id });
-        await reply(route, { materialId: id, jobId: SUMMARY_JOB }, 202);
+        const key = request.headers()['idempotency-key'];
+        if (!state.generationJobs.has(key)) {
+          const jobId = 'b6fc0911-af70-4cbb-8a9b-' + String(state.nextSummaryJob++).padStart(12, '0');
+          state.generationJobs.set(key, jobId);
+          state.summary = state.summary
+            ? { ...state.summary, status: 'queued', jobId, error: null }
+            : summary('queued', { materialId: id, jobId });
+        }
+        await reply(route, { materialId: id, jobId: state.generationJobs.get(key) }, 202);
+      }
+    } else if (method === 'PATCH' && /^\/materials\/[^/]+\/summary$/.test(path)) {
+      const id = path.split('/')[2];
+      const body = request.postDataJSON();
+      state.patches.push({ id, body, headers: request.headers() });
+      if (state.onSummaryPatch) await state.onSummaryPatch(route, id);
+      else if (!state.summary) await fail(route, 404, 'SUMMARY_NOT_FOUND');
+      else if (['queued', 'running'].includes(state.summary.status)) await fail(route, 409, 'SUMMARY_IN_PROGRESS');
+      else if (body.version !== state.summary.version) await fail(route, 409, 'SUMMARY_VERSION_CONFLICT');
+      else {
+        state.summary = {
+          ...state.summary, content: body.content, version: body.version + 1,
+          origin: 'user', model: null, sourcePages: [], inputTokens: null, outputTokens: null,
+        };
+        await reply(route, state.summary);
       }
     } else if (method === 'GET' && path.startsWith('/jobs/')) {
       const id = path.slice('/jobs/'.length);
@@ -282,10 +315,10 @@ test('Конспект: чтение сохранённого текста эк�
   await expect(createButton(page)).toHaveCount(0);
   await expect(summaryPanel(page).getByRole('textbox')).toHaveCount(0);
   await expect(summaryPanel(page).getByRole('progressbar')).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath('summary-read-desktop.png'), fullPage: true });
+  await captureSummaryPage(page, testInfo, 'summary-read-desktop.png');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: testInfo.outputPath('summary-read-mobile.png'), fullPage: true });
+  await captureSummaryPage(page, testInfo, 'summary-read-mobile.png');
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
   expect(storage).not.toContain('summaryExecuted');
   await page.reload();
@@ -678,4 +711,527 @@ test('Конспект: поздний POST после закрытия не н�
   await expect(summaryPanel(page)).toContainText(SOURCE_CONTENT);
   expect(state.jobGets).toHaveLength(1);
   expect(state.posts).toHaveLength(1);
+});
+
+function editor(page) {
+  return summaryPanel(page).getByRole('form', { name: 'Редактирование конспекта', exact: true });
+}
+
+function editorInput(page) { return editor(page).getByLabel('Текст конспекта', { exact: true }); }
+function saveSummary(page) { return editor(page).getByRole('button', { name: 'Сохранить конспект', exact: true }); }
+function editButton(page) { return summaryPanel(page).getByRole('button', { name: 'Редактировать конспект', exact: true }); }
+function regenerateButton(page) { return summaryPanel(page).getByRole('button', { name: 'Создать заново', exact: true }); }
+function regenerateConsent(page) { return page.getByRole('dialog', { name: 'Создать конспект заново?', exact: true }); }
+function regenerateConfirm(page) { return regenerateConsent(page).getByRole('button', { name: 'Подтвердить новую генерацию', exact: true }); }
+
+async function openEditor(page) {
+  await editButton(page).click();
+  await expect(editorInput(page)).toBeEnabled();
+}
+
+async function regenerate(page) {
+  await regenerateButton(page).click();
+  await expect(regenerateConsent(page)).toBeVisible();
+  await regenerateConfirm(page).click();
+}
+
+async function expectEditorReview(page, draft, serverContent) {
+  await expect(editor(page).getByText('На сервере', { exact: true })).toBeVisible();
+  await expect(editor(page).getByText('Твой черновик', { exact: true })).toBeVisible();
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(editor(page)).toContainText(serverContent);
+  await expect(saveSummary(page)).toBeDisabled();
+  await expect(editor(page).getByRole('button', { name: 'Продолжить с моим черновиком', exact: true })).toBeEnabled();
+}
+
+async function chooseEditorDraft(page) {
+  await editor(page).getByRole('button', { name: 'Продолжить с моим черновиком', exact: true }).click();
+}
+
+test('Редактирование конспекта: свежая версия, один PATCH и сохранение переносов строк', async ({ page }, testInfo) => {
+  const readGate = deferred();
+  const writeGate = deferred();
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await expect(editButton(page)).toBeEnabled();
+  state.summary = summary('ready', { content: 'Свежий текст с сервера', version: 4 });
+  state.onSummaryGet = async (route) => {
+    await readGate.promise;
+    await reply(route, state.summary);
+  };
+  try {
+    await editButton(page).click();
+    await expect.poll(() => state.summaryGets.length).toBeGreaterThan(1);
+    await expect(saveSummary(page)).toBeDisabled();
+    expect(state.patches).toHaveLength(0);
+  } finally { readGate.resolve(); }
+  await expect(editorInput(page)).toHaveValue('Свежий текст с сервера');
+  const draft = 'Первый абзац правки.\n\nВторой абзац.\nСтрока со  внутренними   пробелами.';
+  await editorInput(page).fill(draft);
+  await expect(regenerateButton(page)).toBeDisabled();
+  await captureSummaryPage(page, testInfo, 'summary-editor-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await captureSummaryPage(page, testInfo, 'summary-editor-mobile.png');
+  state.onSummaryGet = null;
+  state.onSummaryPatch = async (route) => {
+    await writeGate.promise;
+    const { content, version } = route.request().postDataJSON();
+    state.summary = summary('ready', {
+      content, version: version + 1, origin: 'user', model: null,
+      sourcePages: [], inputTokens: null, outputTokens: null,
+    });
+    await reply(route, state.summary);
+  };
+  try {
+    await editor(page).evaluate((form) => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await expect.poll(() => state.patches.length).toBe(1);
+    await expect(editorInput(page)).toBeDisabled();
+    await expect(summaryPanel(page).locator('.material-summary-content')).not.toHaveText(draft);
+  } finally { writeGate.resolve(); }
+  await expect(editor(page)).toHaveCount(0);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(draft);
+  await expect(summaryPanel(page)).toContainText('Отредактирован вручную');
+  await expect(summaryPanel(page)).not.toContainText('Страницы-источники:');
+  expect(state.patches).toHaveLength(1);
+  expect(state.patches[0].body).toEqual({ content: draft, version: 4 });
+  expect(state.patches[0].headers['x-csrf-token']).toBeTruthy();
+  expect(state.patches[0].headers['idempotency-key']).toBeUndefined();
+  expect(state.posts).toHaveLength(0);
+});
+
+test('Редактирование конспекта: пустой текст и 422 сохраняют черновик после скрытия редактора', async ({ page }) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  await editorInput(page).fill('   \n\n   ');
+  await saveSummary(page).click();
+  await expect(editorInput(page)).toHaveAttribute('aria-invalid', 'true');
+  expect(state.patches).toHaveLength(0);
+  const draft = 'Черновик, который нужно сохранить.\nВторая строка.';
+  state.onSummaryPatch = (route) => fail(route, 422, 'VALIDATION_FAILED', {}, {
+    content: 'Уточни текст конспекта.',
+  });
+  await editorInput(page).fill(draft);
+  await saveSummary(page).click();
+  await expect(editorInput(page)).toHaveAttribute('aria-invalid', 'true');
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(editor(page)).not.toContainText('Внутренние подробности сервера.');
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  await expect(editor(page)).toHaveCount(0);
+  await expect(regenerateButton(page)).toBeEnabled();
+  await openEditor(page);
+  await expect(editorInput(page)).toHaveValue(draft);
+  state.onSummaryPatch = null;
+  await saveSummary(page).click();
+  await expect(editor(page)).toHaveCount(0);
+  expect(state.patches).toHaveLength(2);
+  expect(state.patches[1].body).toEqual({ content: draft, version: 1 });
+});
+
+test('Редактирование конспекта: конфликт и неудачный GET не разрешают перезапись до явного выбора', async ({ page }, testInfo) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  const draft = 'Моя версия конспекта\n\nС дополнительными замечаниями.';
+  const serverContent = 'Текст, изменённый в другой вкладке.\n<script>window.comparisonExecuted=true</script>';
+  await editorInput(page).fill(draft);
+  state.summary = summary('ready', { content: serverContent, version: 7 });
+  await saveSummary(page).click();
+  const review = editor(page).getByRole('button', { name: 'Загрузить актуальную версию', exact: true });
+  await expect(review).toBeEnabled();
+  await expect(saveSummary(page)).toBeDisabled();
+  state.onSummaryGet = (route) => fail(route, 503, 'SERVICE_UNAVAILABLE');
+  await review.click();
+  await expect(review).toBeEnabled();
+  await expect(saveSummary(page)).toBeDisabled();
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(editor(page).getByRole('button', { name: 'Продолжить с моим черновиком', exact: true })).toHaveCount(0);
+  state.onSummaryGet = null;
+  await review.click();
+  await expectEditorReview(page, draft, serverContent);
+  await expect(editor(page).locator('script')).toHaveCount(0);
+  expect(await page.evaluate(() => Boolean(window.comparisonExecuted))).toBe(false);
+  await captureSummaryPage(page, testInfo, 'summary-editor-conflict-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await captureSummaryPage(page, testInfo, 'summary-editor-conflict-mobile.png');
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  state.onSummaryGet = (route) => fail(route, 503, 'SERVICE_UNAVAILABLE');
+  await editButton(page).click();
+  await expect(review).toBeEnabled();
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(saveSummary(page)).toBeDisabled();
+  await expect(editor(page).getByRole('button', { name: 'Продолжить с моим черновиком', exact: true })).toHaveCount(0);
+  expect(state.patches).toHaveLength(1);
+  state.onSummaryGet = null;
+  await review.click();
+  await expectEditorReview(page, draft, serverContent);
+  await chooseEditorDraft(page);
+  await expect(saveSummary(page)).toBeEnabled();
+  expect(state.patches).toHaveLength(1);
+  await saveSummary(page).click();
+  await expect(editor(page)).toHaveCount(0);
+  expect(state.patches[1].body).toEqual({ content: draft, version: 7 });
+});
+
+test('Редактирование конспекта: неизвестный PATCH проверяется GET; выбор сервера не отправляет PATCH', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  const draft = 'Сохранённый текст, чей HTTP-ответ потерялся.';
+  await editorInput(page).fill(draft);
+  state.onSummaryPatch = async (route) => {
+    state.summary = summary('ready', { version: 2, content: draft, origin: 'user', model: null,
+      sourcePages: [], inputTokens: null, outputTokens: null });
+    await route.abort('failed');
+  };
+  await saveSummary(page).click();
+  await expect(editor(page).getByRole('button', { name: 'Проверить сохранение', exact: true })).toBeEnabled();
+  await expect(saveSummary(page)).toBeDisabled();
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  await expect(regenerateButton(page)).toBeDisabled();
+  await editButton(page).click();
+  await expectEditorReview(page, draft, draft);
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  await expect(regenerateButton(page)).toBeDisabled();
+  await editButton(page).click();
+  await expectEditorReview(page, draft, draft);
+  await page.clock.runFor(5000);
+  expect(state.patches).toHaveLength(1);
+  await editor(page).getByRole('button', { name: 'Использовать версию сервера', exact: true }).click();
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(saveSummary(page)).toBeEnabled();
+  expect(state.patches).toHaveLength(1);
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  await expect(regenerateButton(page)).toBeEnabled();
+});
+
+test('Редактирование конспекта: CSRF восстанавливает черновик без повторной отправки', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  const draft = 'Правка после восстановления сессии.\nНе терять эту строку.';
+  await editorInput(page).fill(draft);
+  const before = state.csrfCount;
+  state.onSummaryPatch = (route) => fail(route, 403, 'CSRF_INVALID');
+  await saveSummary(page).click();
+  await expect.poll(() => state.csrfCount).toBeGreaterThan(before);
+  await expect(editorInput(page)).toHaveValue(draft);
+  await expect(saveSummary(page)).toBeEnabled();
+  await page.clock.runFor(3000);
+  expect(state.patches).toHaveLength(1);
+  state.onSummaryPatch = null;
+  await saveSummary(page).click();
+  await expect(editor(page)).toHaveCount(0);
+  expect(state.patches).toHaveLength(2);
+  expect(state.patches[1].headers['x-csrf-token']).not.toBe(state.patches[0].headers['x-csrf-token']);
+});
+
+test('Редактирование конспекта: поздний PATCH после закрытия и открытия удаления не меняет панель', async ({ page }) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  for (const [index, action] of ['close', 'delete'].entries()) {
+    if (index === 0) await openEditor(page);
+    else {
+      await openSummary(page);
+      await expectEditorReview(page, 'Поздний черновик 0', SOURCE_CONTENT);
+      await chooseEditorDraft(page);
+    }
+    const gate = deferred();
+    let responded = false;
+    await editorInput(page).fill('Поздний черновик ' + index);
+    state.onSummaryPatch = async (route) => {
+      await gate.promise;
+      await reply(route, summary('ready', { version: 2, content: 'Поздний черновик ' + index,
+        origin: 'user', model: null, sourcePages: [], inputTokens: null, outputTokens: null })).catch(() => {});
+      responded = true;
+    };
+    await saveSummary(page).click();
+    try {
+      await expect.poll(() => state.patches.length).toBe(index + 1);
+      if (action === 'close') await closeSummary(page);
+      else await materials(page).getByRole('button', {
+        name: 'Удалить материал «' + material().title + '»', exact: true,
+      }).click();
+    } finally { gate.resolve(); }
+    await expect.poll(() => responded).toBe(true);
+    await expect(summaryPanel(page)).toHaveCount(0);
+  }
+  expect(state.posts).toHaveLength(0);
+});
+
+test('Редактирование конспекта: другой аккаунт не получает частный черновик после 401', async ({ page }) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  await editorInput(page).fill('Частный черновик первого аккаунта');
+  state.onSummaryPatch = async (route) => {
+    state.user = null;
+    await fail(route, 401, 'AUTHENTICATION_REQUIRED');
+  };
+  await saveSummary(page).click();
+  await expect(page.getByRole('heading', { name: 'С возвращением!', exact: true })).toBeVisible();
+  state.loginUser = OTHER_USER;
+  state.subjects = [OTHER_SUBJECT];
+  const other = material({ id: SECOND_MATERIAL_ID, subjectId: OTHER_SUBJECT.id, title: 'Материал другого аккаунта' });
+  state.files = [other];
+  state.summary = summary('ready', { materialId: other.id, content: 'Конспект другого аккаунта' });
+  state.onSummaryPatch = null;
+  await login(page, OTHER_USER);
+  await openMaterials(page, OTHER_SUBJECT);
+  await openSummary(page, other);
+  await expect(editor(page)).toHaveCount(0);
+  await openEditor(page);
+  await expect(editorInput(page)).toHaveValue('Конспект другого аккаунта');
+  await expect(page.locator('body')).not.toContainText('Частный черновик первого аккаунта');
+  expect(state.patches).toHaveLength(1);
+});
+
+test('Повторная генерация: согласие, новая UUID и старый ручной текст до успешной записи', async ({ page }, testInfo) => {
+  await page.clock.install();
+  const manual = summary('ready', { content: 'Ручная версия конспекта', version: 3, origin: 'user', model: null,
+    sourcePages: [], inputTokens: null, outputTokens: null });
+  const state = await mockSummaries(page, { summary: manual });
+  state.onJob = async (route, id) => {
+    if (id === SUMMARY_JOB_2) {
+      if (state.jobGets.filter((value) => value === id).length === 1) await reply(route, job('running', { id }));
+      else {
+        state.summary = { ...manual, jobId: id, status: 'failed', error: { code: 'AI_INVALID_RESPONSE', message: 'Сырые подробности ИИ.' } };
+        await reply(route, job('failed', { id }));
+      }
+    } else {
+      state.summary = summary('ready', { jobId: id, version: 4, content: 'Успешно созданный новый конспект' });
+      await reply(route, job('succeeded', { id }));
+    }
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerateButton(page).click();
+  await expect(regenerateConsent(page)).toContainText('OpenAI');
+  await expect(regenerateConsent(page)).toContainText(/баланс/i);
+  await expect(regenerateConsent(page)).toContainText(/замен|предыдущ|текущ/i);
+  await expect(regenerateConsent(page)).toContainText(/ручн/i);
+  await page.screenshot({ path: testInfo.outputPath('summary-regenerate-consent-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const bounds = await regenerateConsent(page).boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+  await page.screenshot({ path: testInfo.outputPath('summary-regenerate-consent-mobile.png') });
+  await regenerateConsent(page).getByRole('button', { name: 'Отмена', exact: true }).click();
+  expect(state.posts).toHaveLength(0);
+  await regenerateButton(page).click();
+  await regenerateConfirm(page).evaluate((button) => { button.click(); button.click(); });
+  await expect.poll(() => state.jobGets.length).toBe(1);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(manual.content);
+  await expect(editButton(page)).toBeDisabled();
+  await page.clock.runFor(2100);
+  await expect(regenerateButton(page)).toBeEnabled();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(manual.content);
+  await expect(summaryPanel(page)).not.toContainText('Сырые подробности ИИ.');
+  expect(state.posts).toHaveLength(1);
+  await regenerate(page);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Успешно созданный новый конспект');
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[0].key).toMatch(UUID);
+  expect(state.posts[1].key).toMatch(UUID);
+  expect(state.posts[1].key).not.toBe(state.posts[0].key);
+  expect(state.jobGets).toContain(SUMMARY_JOB_2);
+  expect(state.jobGets).toContain(SUMMARY_JOB_3);
+});
+
+test('Повторная генерация: неизвестный POST и старый GET сохраняют тот же ключ для явного повтора', async ({ page }) => {
+  await page.clock.install();
+  const old = summary();
+  const state = await mockSummaries(page, { summary: old });
+  state.onSummaryPost = (route) => route.abort('failed');
+  state.onJob = async (route, id) => {
+    state.summary = summary('ready', { jobId: id, version: 2, content: 'Новый результат прежней попытки' });
+    await reply(route, job('succeeded', { id }));
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerate(page);
+  await expect(retryButton(page)).toBeEnabled();
+  await expect(editButton(page)).toBeDisabled();
+  await refreshButton(page).click();
+  await expect(retryButton(page)).toBeEnabled();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(old.content);
+  await closeSummary(page);
+  await openSummary(page);
+  await expect(retryButton(page)).toBeEnabled();
+  await page.clock.runFor(5000);
+  expect(state.posts).toHaveLength(1);
+  state.onSummaryPost = null;
+  await confirmGeneration(page, true);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Новый результат прежней попытки');
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[1].key).toBe(state.posts[0].key);
+});
+
+test('Повторная генерация: 202 и старый terminal GET наблюдают возвращённое новое задание', async ({ page }) => {
+  await page.clock.install();
+  const old = summary();
+  const state = await mockSummaries(page, { summary: old });
+  state.onSummaryPost = (route, id) => reply(route, { materialId: id, jobId: SUMMARY_JOB_2 }, 202);
+  state.onJob = async (route, id) => {
+    if (state.jobGets.length === 1) await reply(route, job('running', { id }));
+    else {
+      state.summary = summary('ready', { jobId: id, version: 2, content: 'Подтверждённая новая версия' });
+      await reply(route, job('succeeded', { id }));
+    }
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerate(page);
+  await expect.poll(() => state.jobGets.length).toBe(1);
+  expect(state.jobGets[0]).toBe(SUMMARY_JOB_2);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(old.content);
+  await expect(editButton(page)).toBeDisabled();
+  await expect(regenerateButton(page)).toBeDisabled();
+  await page.clock.runFor(2100);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Подтверждённая новая версия');
+  expect(state.posts).toHaveLength(1);
+});
+
+test('Повторная генерация: изменение версии или готовности между согласием и POST требует нового решения', async ({ page }) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerateButton(page).click();
+  state.summary = summary('ready', { version: 2, content: 'Свежая ручная правка из другой вкладки',
+    origin: 'user', model: null, sourcePages: [], inputTokens: null, outputTokens: null });
+  await regenerateConfirm(page).click();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(state.summary.content);
+  expect(state.posts).toHaveLength(0);
+  await regenerateButton(page).click();
+  state.files = [material({ processingStatus: 'failed', pageCount: null, textCharacters: null,
+    processingError: { code: 'PDF_INVALID', message: 'Сырые подробности.' } })];
+  await regenerateConfirm(page).click();
+  await expect(summaryPanel(page)).not.toContainText('Сырые подробности.');
+  await expect(regenerateButton(page)).toBeDisabled();
+  expect(state.posts).toHaveLength(0);
+});
+
+test('Повторная генерация: скрытый известный черновик сохраняется и сравнивается с новой версией', async ({ page }) => {
+  const state = await mockSummaries(page, { summary: summary() });
+  state.onJob = async (route, id) => {
+    state.summary = summary('ready', { jobId: id, version: 2, content: 'Новая версия от ИИ' });
+    await reply(route, job('succeeded', { id }));
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await openEditor(page);
+  const draft = 'Несохранённый личный черновик.';
+  await editorInput(page).fill(draft);
+  await expect(regenerateButton(page)).toBeDisabled();
+  await editor(page).getByRole('button', { name: 'Скрыть редактор', exact: true }).click();
+  await regenerateButton(page).click();
+  await expect(regenerateConsent(page)).toContainText(/черновик/i);
+  await regenerateConfirm(page).click();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Новая версия от ИИ');
+  await editButton(page).click();
+  await expectEditorReview(page, draft, 'Новая версия от ИИ');
+  expect(state.patches).toHaveLength(0);
+  expect(state.posts).toHaveLength(1);
+});
+
+test('Повторная генерация: Retry-After и закрытие сохраняют ключ на фоне прежней версии', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSummaries(page, { summary: summary() });
+  state.onSummaryPost = (route) => fail(route, 429, 'RATE_LIMITED', { 'Retry-After': '30' });
+  state.onJob = async (route, id) => {
+    state.summary = summary('ready', { jobId: id, version: 2, content: 'Конспект после явного повтора' });
+    await reply(route, job('succeeded', { id }));
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerate(page);
+  await expect(retryButton(page)).toBeDisabled();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(SOURCE_CONTENT);
+  await closeSummary(page);
+  await openSummary(page);
+  await expect(refreshButton(page)).toBeDisabled();
+  await page.clock.runFor(30_500);
+  await expect(refreshButton(page)).toBeEnabled();
+  expect(state.posts).toHaveLength(1);
+  await refreshButton(page).click();
+  await expect(retryButton(page)).toBeEnabled();
+  state.onSummaryPost = null;
+  await confirmGeneration(page, true);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Конспект после явного повтора');
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[1].key).toBe(state.posts[0].key);
+});
+
+test('Повторная генерация: неизвестная попытка и новые ручные версии требуют свежего согласия с прежним ключом', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSummaries(page, { summary: summary() });
+  state.onSummaryPost = (route) => route.abort('failed');
+  state.onJob = async (route, id) => {
+    if (state.jobGets.length === 1) await reply(route, job('running', { id }));
+    else {
+      state.summary = summary('ready', { jobId: id, version: 4, content: 'Новый конспект после явного согласия' });
+      await reply(route, job('succeeded', { id }));
+    }
+  };
+  await openMaterials(page);
+  await openSummary(page);
+  await regenerate(page);
+  await expect(retryButton(page)).toBeEnabled();
+  expect(state.posts).toHaveLength(1);
+
+  // PATCH из другой вкладки изменил version, но оставил jobId прежней генерации.
+  state.summary = summary('ready', {
+    version: 2, content: 'Ручная версия 2 из другой вкладки', origin: 'user', model: null,
+    sourcePages: [], inputTokens: null, outputTokens: null,
+  });
+  await refreshButton(page).click();
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(state.summary.content);
+  await expect(editButton(page)).toBeDisabled();
+  await expect(regenerateButton(page)).toHaveCount(0);
+  await expect(retryButton(page)).toBeEnabled();
+  await retryButton(page).click();
+  await expect(consent(page, true)).toContainText(/ручн/i);
+  await expect(consent(page, true)).toContainText(/замен/i);
+
+  // Согласие с версией 2 не разрешает заменить появившуюся затем версию 3.
+  state.summary = { ...state.summary, version: 3, content: 'Ещё одна ручная версия 3' };
+  await confirmButton(page, true).click();
+  await expect(consent(page, true)).toHaveCount(0);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText(state.summary.content);
+  await expect(retryButton(page)).toBeEnabled();
+  await expect(editButton(page)).toBeDisabled();
+  await expect(regenerateButton(page)).toHaveCount(0);
+  expect(state.posts).toHaveLength(1);
+  await page.clock.runFor(3000);
+  expect(state.posts).toHaveLength(1);
+
+  state.onSummaryPost = null;
+  await retryButton(page).click();
+  await expect(consent(page, true)).toContainText(/ручн/i);
+  await expect(consent(page, true)).toContainText(/замен/i);
+  await confirmButton(page, true).click();
+  await expect.poll(() => state.jobGets.length).toBe(1);
+  expect(state.jobGets[0]).toBe(SUMMARY_JOB_2);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Ещё одна ручная версия 3');
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[1].key).toBe(state.posts[0].key);
+  await page.clock.runFor(2100);
+  await expect(summaryPanel(page).locator('.material-summary-content')).toHaveText('Новый конспект после явного согласия');
+  expect(state.posts).toHaveLength(2);
 });
