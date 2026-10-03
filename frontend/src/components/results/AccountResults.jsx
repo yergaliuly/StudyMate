@@ -71,8 +71,10 @@ export default function AccountResults({ stateRef, attemptRecord, onAccessError,
   const contextMaterial = state.attempts.find((row) => sameId(row.materialId, filters.materialId) && row.materialStatus === 'ready');
   const materialTitle = contextMaterial?.materialTitle || record.filterContext?.materialTitle;
 
-  function changeFilters(next, context) {
+  function changeFilters(next, context, focusHeading = false) {
     if (!canAct()) return;
+    // Row filters and reset remove their own buttons; the select keeps its focus.
+    if (focusHeading) headingRef.current?.focus();
     if (context) record.filterContext = context;
     if (!next.materialId && !next.quizId) record.filterContext = null;
     setNotice('');
@@ -117,7 +119,7 @@ export default function AccountResults({ stateRef, attemptRecord, onAccessError,
             <option value="completed">Завершены</option>
           </select>
         </label>
-        {filtered && <button type="button" className="secondary-button" onClick={() => changeFilters({})}>
+        {filtered && <button type="button" className="secondary-button" onClick={() => changeFilters({}, null, true)}>
           <X size={16} aria-hidden="true" />Сбросить фильтры
         </button>}
       </div>
@@ -199,9 +201,9 @@ export default function AccountResults({ stateRef, attemptRecord, onAccessError,
             {row.status === 'completed' ? 'Открыть результат' : 'Продолжить'}
           </button>
           <button type="button" className="secondary-button" disabled={row.materialStatus === 'unavailable'}
-            onClick={() => changeFilters({ status: filters.status, materialId: row.materialId }, { materialTitle: row.materialTitle })}>Попытки материала</button>
+            onClick={() => changeFilters({ status: filters.status, materialId: row.materialId }, { materialTitle: row.materialTitle }, true)}>Попытки материала</button>
           <button type="button" className="secondary-button" disabled={row.materialStatus === 'unavailable'}
-            onClick={() => changeFilters({ status: filters.status, materialId: row.materialId, quizId: row.quizId }, { materialTitle: row.materialTitle, quizVersion: row.quizVersion })}>Попытки этой версии</button>
+            onClick={() => changeFilters({ status: filters.status, materialId: row.materialId, quizId: row.quizId }, { materialTitle: row.materialTitle, quizVersion: row.quizVersion }, true)}>Попытки этой версии</button>
         </div>
       </li>)}
     </ul>}

@@ -331,6 +331,51 @@ test('История: status, materialId и quizId объединяются AND;
   expect(state.writes).toHaveLength(0);
 });
 
+for (const filterButton of ['Попытки материала', 'Попытки этой версии', 'Сбросить фильтры']) {
+  test('История: клавиатурный фильтр «' + filterButton + '» возвращает фокус к списку', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    const state = await mockHistory(page, {
+      attempts: withAttempts(...Array.from({ length: 6 }, (_, index) =>
+        saved(index + 1, { status: index % 2 === 0 ? 'in_progress' : 'completed' }))),
+    });
+    await openHistory(page);
+    await expect(rows(page)).toHaveCount(6);
+    if (filterButton === 'Сбросить фильтры') {
+      await statusFilter(page).selectOption('completed');
+      await expect(rows(page)).toHaveCount(3);
+    }
+    const gate = deferred();
+    state.onList = async (route) => {
+      await gate.promise;
+      await historyReply(route, state);
+    };
+    try {
+      const button = history(page).getByRole('button', { name: filterButton, exact: true }).last();
+      const heading = history(page).getByRole('heading', { name: 'История попыток', exact: true });
+      await button.focus();
+      if (filterButton !== 'Сбросить фильтры') await expect(heading).not.toBeInViewport();
+      await page.keyboard.press('Enter');
+      await expect(history(page).getByText('Загружаем историю…', { exact: true })).toBeVisible();
+      await expect(button).toHaveCount(0);
+      await expect(heading).toBeFocused();
+      await expect(heading).toBeInViewport({ ratio: 1 });
+      gate.resolve();
+      await expect(rows(page)).toHaveCount(6);
+      await expect(heading).toBeFocused();
+      await expect(heading).toBeInViewport({ ratio: 1 });
+
+      // Selecting a status uses a persistent control and must keep its focus.
+      await statusFilter(page).focus();
+      await statusFilter(page).selectOption('completed');
+      await expect(rows(page)).toHaveCount(3);
+      await expect(statusFilter(page)).toBeFocused();
+      expect(state.writes).toHaveLength(0);
+    } finally {
+      gate.resolve();
+    }
+  });
+}
+
 test('История: пагинация по20 и повторный GET последней страницы после уменьшения total', async ({ page }) => {
   const values = Array.from({ length: 21 }, (_, index) => saved(index + 1));
   const state = await mockHistory(page, { attempts: withAttempts(...values) });

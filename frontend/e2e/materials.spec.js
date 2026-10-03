@@ -1294,6 +1294,63 @@ test('Текст: свежий GET, пустая страница, безопа�
   });
 });
 
+test('Текст: клавиатурная пагинация сохраняет фокус при загрузке, поздний ответ не возвращает его в закрытую панель', async ({ page }) => {
+  const state = await mockProcessing(page, { files: [processingFile()] });
+  await openMaterials(page);
+  await openProcessing(page);
+  await expectFirstTextPage(page);
+  const panel = processingPanel(page);
+  const heading = panel.getByRole('heading', { name: 'Текст материала', exact: true });
+  const nextGate = deferred();
+  const backGate = deferred();
+  let backResponded = false;
+
+  try {
+    state.onText = async (route) => {
+      await nextGate.promise;
+      await listResponse(route, PDF_TEXT_PAGES.slice(5), PDF_TEXT_PAGES.length);
+    };
+    const next = panel.getByRole('button', { name: 'Вперёд по тексту', exact: true });
+    await next.focus();
+    await page.keyboard.press('Enter');
+    await expect(panel.getByText('Загружаем страницы…', { exact: true })).toBeVisible();
+    await expect(next).toHaveCount(0);
+    await expect(heading).toBeFocused();
+
+    // A response must not steal focus if the user moves on during loading.
+    const close = panel.getByRole('button', { name: 'Закрыть текст', exact: true });
+    await close.focus();
+    nextGate.resolve();
+    await expect(panel.getByRole('heading', { name: 'Страница PDF 6', exact: true })).toBeVisible();
+    await expect(close).toBeFocused();
+
+    state.onText = async (route) => {
+      await backGate.promise;
+      await listResponse(route, PDF_TEXT_PAGES.slice(0, 5), PDF_TEXT_PAGES.length).catch(() => {});
+      backResponded = true;
+    };
+    await panel.getByRole('button', { name: 'Назад по тексту', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(panel.getByText('Загружаем страницы…', { exact: true })).toBeVisible();
+    await expect(heading).toBeFocused();
+    await expect.poll(() => state.textGets.length).toBe(3);
+    await close.focus();
+    await page.keyboard.press('Enter');
+    await expect(panel).toHaveCount(0);
+    // The fresh material read refreshes its card, so close uses the stable search fallback.
+    const returnFocus = materials(page).getByLabel('Поиск материалов', { exact: true });
+    await expect(returnFocus).toBeFocused();
+    backGate.resolve();
+    await expect.poll(() => backResponded).toBe(true);
+    await expect(panel).toHaveCount(0);
+    await expect(returnFocus).toBeFocused();
+    expect(state.writes).toEqual([]);
+  } finally {
+    nextGate.resolve();
+    backGate.resolve();
+  }
+});
+
 test('Текст: выполнение задания завершается свежим GET и чтением страниц', async ({ page }) => {
   await page.clock.install();
 

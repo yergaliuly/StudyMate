@@ -116,6 +116,7 @@ export default function Sidebar({
   navigationId = 'mobile-navigation',
 }) {
   const dialogRef = useRef(null);
+  const desktopRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -133,9 +134,11 @@ export default function Sidebar({
 
     // Закрываем мобильное меню при переходе к широкому экрану.
     const mediaQuery = window.matchMedia('(min-width: 961px)');
+    let closingForDesktop = false;
 
     const handleResize = () => {
       if (mediaQuery.matches) {
+        closingForDesktop = true;
         onClose();
       }
     };
@@ -149,6 +152,12 @@ export default function Sidebar({
 
       if (dialog.open) {
         dialog.close();
+      }
+
+      // The mobile opener is hidden at this width, so native dialog focus
+      // restoration needs a visible destination in the desktop navigation.
+      if (closingForDesktop && mediaQuery.matches) {
+        desktopRef.current?.querySelector('[aria-current="page"]')?.focus({ preventScroll: true });
       }
     };
   }, [isOpen, onClose]);
@@ -173,7 +182,7 @@ export default function Sidebar({
 
   return (
     <>
-      <aside className="sidebar sidebar--desktop">
+      <aside ref={desktopRef} className="sidebar sidebar--desktop">
         <SidebarContent
           activePage={activePage}
           onNavigate={onNavigate}

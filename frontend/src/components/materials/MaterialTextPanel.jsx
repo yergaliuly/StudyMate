@@ -111,6 +111,9 @@ export default function MaterialTextPanel({
     refresh();
   };
   const readPage = (page) => {
+    if (!callbacksRef.current.canAct(materialId) || !readerRef.current) return;
+    // Loading replaces the page navigation; move focus before its button disappears.
+    headingRef.current?.focus();
     void readerRef.current?.readPage(page);
   };
 
