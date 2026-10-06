@@ -5,6 +5,7 @@ import com.studymate.common.api.ApiException;
 import com.studymate.jobs.JobError;
 import com.studymate.jobs.JobQueue;
 import com.studymate.jobs.RetryPolicy;
+import com.studymate.pilot.PilotLimits;
 import java.security.SecureRandom;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -28,8 +29,9 @@ class QuizRepository {
   private final JdbcClient jdbc;
   private final JobQueue jobs;
   private final JsonMapper json;
-  QuizRepository(JdbcClient jdbc, JobQueue jobs, JsonMapper json) {
-    this.jdbc = jdbc; this.jobs = jobs; this.json = json;
+  private final PilotLimits limits;
+  QuizRepository(JdbcClient jdbc, JobQueue jobs, JsonMapper json, PilotLimits limits) {
+    this.jdbc = jdbc; this.jobs = jobs; this.json = json; this.limits=limits;
   }
   record Start(UUID materialId, UUID jobId) {}
   record Error(String code, String message) {}
@@ -62,6 +64,7 @@ class QuizRepository {
     if (prior.isPresent()) return new Start(material, prior.get());
     if ("queued".equals(state.jobStatus()) || "running".equals(state.jobStatus()))
       throw new ApiException(HttpStatus.CONFLICT, "QUIZ_IN_PROGRESS", "Тест уже создаётся.", Map.of(), 2);
+    limits.aiGeneration(owner);
     UUID job = jobs.enqueue(owner, KIND, key, json.valueToTree(Map.of("materialId", material)), RetryPolicy.MANUAL, 1200);
     jdbc.sql("UPDATE studymate.materials SET quiz_job_id=:job,updated_at=clock_timestamp() WHERE owner_id=:owner AND id=:material")
         .param("job", job).param("owner", owner).param("material", material).update();

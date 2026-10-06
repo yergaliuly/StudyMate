@@ -1,7 +1,7 @@
 package com.studymate.identity;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static com.studymate.identity.SessionCsrf.bootstrap;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -28,7 +28,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.json.JsonMapper;
 
-@SpringBootTest(properties = "studymate.registration.enabled=true")
+@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,
+    properties = "studymate.registration.enabled=true")
 @AutoConfigureMockMvc
 class RegistrationIT extends PostgresIntegrationTest {
   private static final String PASSWORD = "  Example-only пароль!  ";
@@ -124,7 +125,7 @@ class RegistrationIT extends PostgresIntegrationTest {
   }
 
   private ResultActions register(String email, String displayName) throws Exception {
-    return mvc.perform(post("/api/v1/auth/register").with(csrf().asHeader())
+    return mvc.perform(post("/api/v1/auth/register").with(bootstrap(mvc))
         .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(
             Map.of("email", email, "password", PASSWORD, "displayName", displayName))));
   }

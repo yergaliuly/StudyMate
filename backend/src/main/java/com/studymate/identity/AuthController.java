@@ -1,6 +1,7 @@
 package com.studymate.identity;
 
 import com.studymate.common.api.ApiResponse;
+import com.studymate.pilot.PilotLimits;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -26,14 +27,16 @@ class AuthController {
   private final SecurityContextRepository contexts;
   private final CurrentAccount accounts;
   private final Clock clock;
+  private final PilotLimits limits;
 
   AuthController(AuthenticationManager authenticationManager, SessionAuthenticationStrategy sessions,
-      SecurityContextRepository contexts, CurrentAccount accounts, Clock clock) {
+      SecurityContextRepository contexts, CurrentAccount accounts, Clock clock, PilotLimits limits) {
     this.authenticationManager = authenticationManager;
     this.sessions = sessions;
     this.contexts = contexts;
     this.accounts = accounts;
     this.clock = clock;
+    this.limits = limits;
   }
 
   record CsrfResponse(String headerName, String token) {
@@ -49,6 +52,7 @@ class AuthController {
   @PostMapping(path = "/api/v1/auth/login", consumes = MediaType.APPLICATION_JSON_VALUE)
   ResponseEntity<ApiResponse<UserResponse>> login(@Valid @RequestBody LoginRequest body,
       HttpServletRequest request, HttpServletResponse response) {
+    limits.loginEmail(body.email());
     var input = UsernamePasswordAuthenticationToken.unauthenticated(body.email(), body.password());
     Authentication authentication;
     try {

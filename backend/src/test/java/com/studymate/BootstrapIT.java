@@ -2,7 +2,7 @@ package com.studymate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static com.studymate.identity.SessionCsrf.bootstrap;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -115,7 +115,7 @@ class BootstrapIT extends PostgresIntegrationTest {
   @Test
   void disabledRegistrationRejectsEvenValidCsrf() throws Exception {
     long countBefore = jdbc.queryForObject("SELECT count(*) FROM studymate.users", Long.class);
-    mvc.perform(post("/api/v1/auth/register").with(csrf().asHeader())
+    mvc.perform(post("/api/v1/auth/register").with(bootstrap(mvc))
             .contentType(MediaType.APPLICATION_JSON).content("""
                 {"email":"closed@example.com","password":"Example-only password!","displayName":"Test"}
                 """))

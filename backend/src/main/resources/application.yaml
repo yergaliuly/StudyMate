@@ -69,6 +69,16 @@ studymate:
     max-retry-delay-seconds: ${STUDYMATE_JOBS_MAX_RETRY_DELAY_SECONDS:60}
   registration:
     enabled: ${STUDYMATE_REGISTRATION_ENABLED:false}
+    allowed-emails: ${STUDYMATE_REGISTRATION_ALLOWED_EMAILS:}
+  limits:
+    enabled: ${STUDYMATE_LIMITS_ENABLED:true}
+    csrf-per-minute: ${STUDYMATE_LIMITS_CSRF_PER_MINUTE:120}
+    login-per-minute: ${STUDYMATE_LIMITS_LOGIN_PER_MINUTE:60}
+    registrations-per-hour: ${STUDYMATE_LIMITS_REGISTRATIONS_PER_HOUR:20}
+    login-per-email-quarter-hour: ${STUDYMATE_LIMITS_LOGIN_PER_EMAIL:10}
+    account-requests-per-minute: ${STUDYMATE_LIMITS_ACCOUNT_PER_MINUTE:300}
+    ai-per-account-day: ${STUDYMATE_LIMITS_AI_PER_ACCOUNT_DAY:10}
+    ai-total-per-day: ${STUDYMATE_LIMITS_AI_TOTAL_PER_DAY:50}
 
 server:
   tomcat:

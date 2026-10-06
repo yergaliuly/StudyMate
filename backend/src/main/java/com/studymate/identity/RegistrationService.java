@@ -21,7 +21,7 @@ class RegistrationService {
   }
 
   User register(RegistrationRequest request) {
-    if (!properties.enabled()) {
+    if (!properties.enabled() || !properties.allowedEmails().isEmpty() && !properties.allowedEmails().contains(request.email())) {
       throw new ApiException(HttpStatus.FORBIDDEN, "REGISTRATION_CLOSED",
           "Регистрация пока закрыта.", Map.of());
     }

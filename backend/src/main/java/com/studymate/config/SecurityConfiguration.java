@@ -4,7 +4,10 @@ import com.studymate.common.api.ApiErrorResponse;
 import com.studymate.common.api.ApiErrors;
 import com.studymate.common.api.ApiErrorWriter;
 import com.studymate.materials.ObjectStorage;
+import com.studymate.identity.ExistingCsrfSessionFilter;
 import com.studymate.materials.UploadGateFilter;
+import com.studymate.pilot.AccountRequestLimitFilter;
+import com.studymate.pilot.PilotLimits;
 import jakarta.servlet.DispatcherType;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
@@ -46,7 +49,7 @@ public class SecurityConfiguration {
 
   @Bean
   SecurityFilterChain securityFilterChain(HttpSecurity http, JsonMapper mapper,
-      HttpSessionCsrfTokenRepository tokens, SecurityContextRepository contexts, ObjectStorage storage) throws Exception {
+      HttpSessionCsrfTokenRepository tokens, SecurityContextRepository contexts, ObjectStorage storage, PilotLimits limits) throws Exception {
     var xorCsrf = new XorCsrfTokenRequestAttributeHandler();
     var headerCsrf = new org.springframework.security.web.csrf.CsrfTokenRequestHandler() {
       @Override public void handle(jakarta.servlet.http.HttpServletRequest request,
@@ -85,7 +88,9 @@ public class SecurityConfiguration {
             .anyRequest().denyAll())
         .securityContext(context -> context.securityContextRepository(contexts))
         .csrf(csrf -> csrf.csrfTokenRepository(tokens).csrfTokenRequestHandler(headerCsrf))
-        .addFilterAfter(new UploadGateFilter(storage, mapper), AuthorizationFilter.class)
+        .addFilterBefore(new ExistingCsrfSessionFilter(tokens, mapper), org.springframework.security.web.csrf.CsrfFilter.class)
+        .addFilterAfter(new AccountRequestLimitFilter(limits, mapper), AuthorizationFilter.class)
+        .addFilterAfter(new UploadGateFilter(storage, mapper), AccountRequestLimitFilter.class)
         .formLogin(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
         .logout(logout -> logout.logoutRequestMatcher(request ->

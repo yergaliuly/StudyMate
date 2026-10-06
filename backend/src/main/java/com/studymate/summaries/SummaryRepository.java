@@ -4,6 +4,7 @@ import com.studymate.common.api.ApiException;
 import com.studymate.jobs.JobError;
 import com.studymate.jobs.JobQueue;
 import com.studymate.jobs.RetryPolicy;
+import com.studymate.pilot.PilotLimits;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -23,8 +24,9 @@ class SummaryRepository {
   private final JdbcClient jdbc;
   private final JobQueue jobs;
   private final JsonMapper json;
-  SummaryRepository(JdbcClient jdbc, JobQueue jobs, JsonMapper json) {
-    this.jdbc = jdbc; this.jobs = jobs; this.json = json;
+  private final PilotLimits limits;
+  SummaryRepository(JdbcClient jdbc, JobQueue jobs, JsonMapper json, PilotLimits limits) {
+    this.jdbc = jdbc; this.jobs = jobs; this.json = json; this.limits=limits;
   }
 
   record Start(UUID materialId, UUID jobId) {}
@@ -52,6 +54,7 @@ class SummaryRepository {
     if (prior.isPresent()) return new Start(material, prior.get());
     if ("queued".equals(state.jobStatus()) || "running".equals(state.jobStatus()))
       throw new ApiException(HttpStatus.CONFLICT, "SUMMARY_IN_PROGRESS", "Конспект уже создаётся.", Map.of(), 2);
+    limits.aiGeneration(owner);
     UUID job = jobs.enqueue(owner, KIND, key, json.valueToTree(Map.of("materialId", material)), RetryPolicy.MANUAL, 1200);
     jdbc.sql("INSERT INTO studymate.material_summaries(material_id) VALUES (:material) ON CONFLICT DO NOTHING")
         .param("material", material).update();
