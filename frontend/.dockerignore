@@ -1,0 +1,21 @@
+# Allow only build inputs. Local .env files, credentials and test output never
+# enter the build context, including files nested in source directories.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!index.html
+!vite.config.js
+!src/
+!src/**
+!public/
+!public/**
+!deploy/
+!deploy/default.conf.template
+!deploy/15-validate-upstream.sh
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/credentials.json
