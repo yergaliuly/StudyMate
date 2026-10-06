@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createMaterialTextReader } from "../../services/materialTextReader.js";
+import { retrySeconds } from '../../services/retryAfter.js';
 import "../../styles/materialText.css";
 import MaterialProcessAction from './MaterialProcessAction.jsx';
 import MaterialDownloadAction from './MaterialDownloadAction.jsx';
@@ -41,6 +42,8 @@ function initialView() {
     material: null,
     jobStatus: null,
     watchError: null,
+    errorCode: null,
+    retryAt: 0,
     pages: { status: "idle" },
   };
 }
@@ -59,6 +62,7 @@ export default function MaterialTextPanel({
   const readerRef = useRef(null);
   const callbacksRef = useRef(null);
   const [view, setView] = useState(initialView);
+  const [now, setNow] = useState(Date.now);
 
   callbacksRef.current = {
   record,
@@ -74,6 +78,7 @@ export default function MaterialTextPanel({
     const reader = createMaterialTextReader({
       materialId,
       subjectId,
+      record,
       canAct: (id) => active && callbacksRef.current.canAct(id),
       onChange: (next) => {
         if (active) setView(next);
@@ -104,6 +109,17 @@ export default function MaterialTextPanel({
     };
   }, [materialId, subjectId, record]);
 
+  // Countdown only: reaching the deadline never starts another request.
+  useEffect(() => {
+    setNow(Date.now());
+    if (!retrySeconds(view.retryAt)) return undefined;
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      if (!retrySeconds(view.retryAt)) window.clearInterval(timer);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [view.retryAt]);
+
   const refresh = () => readerRef.current?.refresh();
   const handleRenamed = () => {
     if (!canAct(materialId)) return;
@@ -118,6 +134,8 @@ export default function MaterialTextPanel({
   };
 
   const busy = view.status === "loading" || view.status === "checking";
+  const remaining = retrySeconds(view.retryAt, now);
+  const rateLimitedMessage = 'Слишком много запросов. Подожди перед повтором.';
   const material = view.status === "ready" ? view.material : null;
   const processingStatus = view.jobStatus || material?.processingStatus;
   const pages = view.pages;
@@ -141,7 +159,7 @@ export default function MaterialTextPanel({
             type="button"
             className="secondary-button"
             onClick={refresh}
-            disabled={busy || view.status === "unavailable"}
+            disabled={busy || remaining > 0 || view.status === "unavailable"}
           >
             Обновить материал
           </button>
@@ -151,6 +169,12 @@ export default function MaterialTextPanel({
           </button>
         </div>
       </div>
+
+      {remaining > 0 && (
+        <p className="material-text-hint" role="status">
+          Повтор доступен через {remaining} с.
+        </p>
+      )}
 
       {busy && (
         <p className="material-text-hint" role="status">
@@ -162,7 +186,8 @@ export default function MaterialTextPanel({
 
       {view.status === "error" && (
         <p className="form-error" role="alert">
-          Не удалось загрузить материал. Попробуй обновить его.
+          {view.errorCode === 'RATE_LIMITED'
+            ? rateLimitedMessage : 'Не удалось загрузить материал. Попробуй обновить его.'}
         </p>
       )}
 
@@ -233,7 +258,7 @@ export default function MaterialTextPanel({
 
               {["queued", "running"].includes(processingStatus) && (
                 <p className="material-text-hint">
-                  {view.watchError
+                  {view.watchError === 'RATE_LIMITED' ? rateLimitedMessage : view.watchError
                     ? "Проверка состояния остановлена. Нажми «Обновить материал», чтобы продолжить."
                     : "Состояние обновляется автоматически. После закрытия панели обработка продолжится."}
                 </p>
@@ -250,7 +275,7 @@ export default function MaterialTextPanel({
                   {pages.status === "error" && (
                     <div className="material-text-state">
                       <p className="form-error" role="alert">
-                        {changed
+                        {pages.code === 'RATE_LIMITED' ? rateLimitedMessage : changed
                           ? "Состояние материала изменилось. Нажми «Обновить материал»."
                           : "Не удалось загрузить страницы текста."}
                       </p>
@@ -260,6 +285,7 @@ export default function MaterialTextPanel({
                           type="button"
                           className="secondary-button"
                           onClick={() => readPage(pages.page || 1)}
+                          disabled={remaining > 0}
                         >
                           Повторить загрузку страниц
                         </button>
@@ -301,7 +327,7 @@ export default function MaterialTextPanel({
                         <button
                           type="button"
                           className="secondary-button"
-                          disabled={text.meta.page <= 1}
+                          disabled={remaining > 0 || text.meta.page <= 1}
                           onClick={() => readPage(text.meta.page - 1)}
                         >
                           Назад по тексту
@@ -315,7 +341,7 @@ export default function MaterialTextPanel({
                         <button
                           type="button"
                           className="secondary-button"
-                          disabled={text.meta.page >= lastPage}
+                          disabled={remaining > 0 || text.meta.page >= lastPage}
                           onClick={() => readPage(text.meta.page + 1)}
                         >
                           Вперёд по тексту

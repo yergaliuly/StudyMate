@@ -8,6 +8,8 @@ export default function StorageUsage({
   status = 'loading',
   usage = null,
   onRefresh,
+  errorCode = null,
+  retrySeconds = 0,
 }) {
   const headingId = useId();
   const loading = status === 'loading';
@@ -39,7 +41,7 @@ export default function StorageUsage({
           <button
             type="button"
             className="secondary-button"
-            disabled={loading}
+            disabled={loading || retrySeconds > 0}
             onClick={onRefresh}
             aria-label="Обновить сведения о хранилище"
           >
@@ -55,7 +57,9 @@ export default function StorageUsage({
         </p>
       ) : !ready ? (
         <p className="form-error" role="alert">
-          Не удалось получить сведения о хранилище. Попробуй обновить их.
+          {errorCode === 'RATE_LIMITED'
+            ? 'Слишком много запросов. Подожди перед повтором.'
+            : 'Не удалось получить сведения о хранилище. Попробуй обновить их.'}
         </p>
       ) : (
         <>
@@ -132,6 +136,7 @@ export default function StorageUsage({
           )}
         </>
       )}
+      {retrySeconds > 0 && <p role="status">Повтор доступен через {retrySeconds} с.</p>}
     </section>
   );
 }

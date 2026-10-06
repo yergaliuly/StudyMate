@@ -1674,6 +1674,97 @@ test('Потерянный ответ запуска переживает зак
   })).toHaveCount(0);
 });
 
+for (const stage of ['material', 'pages', 'job']) {
+  test(`Чтение материалов: 429 ${stage} переживает закрытие и ждёт ручного повтора`, async ({ page }) => {
+    await page.clock.install();
+    const state = await mockProcessing(page, {
+      files: [processingFile(1, stage === 'job' ? 'queued' : 'ready')],
+    });
+    const limited = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+    if (stage === 'material') state.onMaterial = limited;
+    if (stage === 'pages') state.onText = limited;
+    if (stage === 'job') state.onJob = limited;
+    await openMaterials(page);
+    await openProcessing(page);
+    await expect(processingPanel(page)).toContainText('Слишком много запросов');
+    await expect(processingPanel(page)).not.toContainText('Внутренние подробности');
+    const refresh = processingPanel(page).getByRole('button', { name: 'Обновить материал', exact: true });
+    await expect(refresh).toBeDisabled();
+    if (stage === 'pages') {
+      await expect(processingPanel(page).getByRole('button', { name: 'Повторить загрузку страниц' })).toBeDisabled();
+    }
+    const counts = [state.materialGets.length, state.textGets.length, state.jobGets.length];
+    state.onMaterial = null;
+    state.onText = null;
+    state.files = [processingFile()];
+    await closeProcessing(page);
+    await openProcessing(page);
+    await expect(refresh).toBeDisabled();
+    expect([state.materialGets.length, state.textGets.length, state.jobGets.length]).toEqual(counts);
+    await page.clock.runFor(30_500);
+    await expect(refresh).toBeEnabled();
+    expect([state.materialGets.length, state.textGets.length, state.jobGets.length]).toEqual(counts);
+    expect(state.writes).toEqual([]);
+    await refresh.click();
+    await expectFirstTextPage(page);
+    expect(state.materialGets).toHaveLength(counts[0] + 1);
+    expect(state.jobGets).toHaveLength(counts[2]);
+    expect(state.writes).toEqual([]);
+  });
+}
+
+test('Чтение материалов: 429 списка блокирует поиск и повтор после возвращения в предмет', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockMaterials(page, {
+    onList: (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' }),
+  });
+  await openMaterials(page);
+  await expect(materials(page)).toContainText('Слишком много запросов');
+  await expect(materials(page).getByLabel('Поиск материалов', { exact: true })).toBeDisabled();
+  const retry = materials(page).getByRole('button', { name: 'Повторить загрузку материалов', exact: true });
+  await expect(retry).toBeDisabled();
+  const count = state.lists.length;
+  state.onList = null;
+  await materials(page).getByRole('button', { name: 'Назад к предметам', exact: true }).click();
+  await openMaterials(page);
+  await expect(retry).toBeDisabled();
+  expect(state.lists).toHaveLength(count);
+  await page.clock.runFor(30_500);
+  await expect(retry).toBeEnabled();
+  expect(state.lists).toHaveLength(count);
+  await retry.click();
+  await expect(materials(page).getByRole('heading', { name: 'Материал 1', exact: true })).toBeVisible();
+  expect(state.lists).toHaveLength(count + 1);
+  expect(state.writes).toEqual([]);
+});
+
+test('Чтение материалов: 429 квоты сохраняется, но не блокирует чтение списка', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockMaterials(page, {
+    onUsage: (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' }),
+  });
+  await openMaterials(page);
+  await expect(quota(page)).toContainText('Слишком много запросов');
+  const retry = quota(page).getByRole('button', { name: 'Обновить сведения о хранилище' });
+  await expect(retry).toBeDisabled();
+  const count = state.usageGets;
+  const lists = state.lists.length;
+  state.onUsage = null;
+  await materials(page).getByRole('button', { name: 'Назад к предметам', exact: true }).click();
+  await openMaterials(page);
+  await expect(retry).toBeDisabled();
+  await expect(materials(page).getByRole('heading', { name: 'Материал 1', exact: true })).toBeVisible();
+  expect(state.lists.length).toBeGreaterThan(lists);
+  expect(state.usageGets).toBe(count);
+  await page.clock.runFor(30_500);
+  await expect(retry).toBeEnabled();
+  expect(state.usageGets).toBe(count);
+  await retry.click();
+  await expect(quota(page).getByRole('meter')).toBeVisible();
+  expect(state.usageGets).toBe(count + 1);
+  expect(state.writes).toEqual([]);
+});
+
 test('Retry-After блокирует кнопку после открытия и не запускает повтор автоматически', async ({ page }) => {
   await page.clock.install();
 

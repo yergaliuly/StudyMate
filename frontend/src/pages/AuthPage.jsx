@@ -13,14 +13,13 @@ import {
 import { authApi } from '../services/authApi.js';
 import { validateAuthForm } from '../services/authValidation.js';
 import { LOGIN_NOT_CONFIRMED } from '../services/sessionFlow.js';
+import { isRateLimited } from '../services/retryAfter.js';
 
 const registrationMessages = {
   EMAIL_ALREADY_EXISTS: 'Этот email уже зарегистрирован. Попробуй войти.',
   REGISTRATION_CLOSED: 'Регистрация сейчас закрыта.',
   VALIDATION_FAILED: 'Проверь отмеченные поля.',
   SERVICE_UNAVAILABLE: 'Сервис временно недоступен. Попробуй позже.',
-  CSRF_INVALID: 'Не удалось проверить безопасность формы. Обнови страницу и попробуй снова.',
-  CSRF_NOT_INITIALIZED: 'Не удалось проверить безопасность формы. Обнови страницу и попробуй снова.',
   NETWORK_ERROR: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
   INVALID_RESPONSE: 'Не удалось подтвердить создание аккаунта. Проверь соединение и попробуй войти.',
 };
@@ -28,13 +27,12 @@ const registrationMessages = {
 const loginMessages = {
   INVALID_CREDENTIALS: 'Неверный email или пароль.',
   VALIDATION_FAILED: 'Проверь отмеченные поля.',
-  CSRF_INVALID: registrationMessages.CSRF_INVALID,
-  CSRF_NOT_INITIALIZED: registrationMessages.CSRF_NOT_INITIALIZED,
   SERVICE_UNAVAILABLE: registrationMessages.SERVICE_UNAVAILABLE,
   LOGIN_NOT_CONFIRMED,
 };
 
 function loginErrorMessage(error) {
+  if (isRateLimited(error)) return 'Слишком много запросов. Подожди перед повторным входом.';
   const message = loginMessages[error?.code];
   return typeof message === 'string'
     ? message
@@ -42,6 +40,7 @@ function loginErrorMessage(error) {
 }
 
 function registrationErrorMessage(error) {
+  if (isRateLimited(error)) return 'Слишком много запросов. Подожди перед повторной регистрацией.';
   const message = registrationMessages[error?.code];
 
   if (typeof message === 'string') {
@@ -58,6 +57,8 @@ export default function AuthPage({
   initialMessage = '',
   onRegistered,
   onLogin,
+  onRecoverCsrf,
+  cooldown,
   onModeChange,
   onOpenDemo,
 }) {
@@ -79,6 +80,7 @@ export default function AuthPage({
   const [message, setMessage] = useState(initialMessage);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [needsCsrfRecovery, setNeedsCsrfRecovery] = useState(false);
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -144,11 +146,45 @@ export default function AuthPage({
     setMessage('');
   }
 
+  async function recoverForm(controller) {
+    setNeedsCsrfRecovery(true);
+    setMessage('Проверяем сессию и безопасность формы…');
+    try {
+      await onRecoverCsrf({ signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setNeedsCsrfRecovery(false);
+      setMessage('Форма обновлена. Введённые данные сохранены. Повтори отправку, когда будешь готов.');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      cooldown.remember(error);
+      setMessage(isRateLimited(error)
+        ? 'Слишком много запросов. Подожди перед повторной проверкой формы.'
+        : 'Не удалось проверить форму. Данные сохранены. Проверь соединение и повтори проверку.');
+    }
+  }
+
+  async function retryFormCheck() {
+    if (submitLockRef.current || cooldown.isBlocked()) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    submitLockRef.current = true;
+    setIsSubmitting(true);
+    try {
+      await recoverForm(controller);
+    } finally {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        submitLockRef.current = false;
+        if (!controller.signal.aborted) setIsSubmitting(false);
+      }
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
 
     // Синхронная защита, в том числе до перерисовки disabled-кнопки.
-    if (submitLockRef.current) {
+    if (submitLockRef.current || needsCsrfRecovery || cooldown.isBlocked()) {
       return;
     }
     setMessage('');
@@ -190,6 +226,12 @@ export default function AuthPage({
       }
     } catch (error) {
       if (controller.signal.aborted) {
+        return;
+      }
+
+      cooldown.remember(error);
+      if (['CSRF_INVALID', 'CSRF_NOT_INITIALIZED'].includes(error?.code)) {
+        await recoverForm(controller);
         return;
       }
 
@@ -436,11 +478,17 @@ export default function AuthPage({
                 {message}
               </p>
             )}
+            {cooldown.blocked && <p className="auth-feedback" role="status">Повтор доступен через {cooldown.seconds} с.</p>}
+            {needsCsrfRecovery && !isSubmitting && (
+              <button type="button" className="secondary-button" onClick={retryFormCheck} disabled={cooldown.blocked}>
+                Повторить проверку формы
+              </button>
+            )}
 
             <button
               type="submit"
               className="primary-button auth-submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || needsCsrfRecovery || cooldown.blocked}
             >
               {isSubmitting
                 ? isRegister ? 'Создаём аккаунт…' : 'Входим…'

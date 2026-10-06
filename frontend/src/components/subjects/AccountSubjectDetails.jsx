@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Code, Database, Languages, Pencil, Trash2, X } from 'lucide-react';
 import { subjectApi } from '../../services/subjectApi.js';
 import { prepareSubjectValues } from '../../services/subjectDraft.js';
+import { isRateLimited, retrySeconds } from '../../services/retryAfter.js';
+import { useRetryCooldown } from '../../hooks/useRetryCooldown.js';
 import '../../styles/subjectDetails.css';
 
 const fields = ['title', 'description', 'icon', 'tone'];
@@ -12,6 +14,7 @@ const unavailableMessage = 'Предмет недоступен. Возможн�
 const conflictMessage = 'Предмет изменился после открытия формы. Твой черновик сохранён. Загрузи актуальную версию и выбери, какие данные оставить.';
 const unknownPatchMessage = 'Не удалось подтвердить сохранение. Изменения могли примениться. Проверь результат перед следующим сохранением.';
 const unknownDeleteMessage = 'Не удалось подтвердить удаление. Предмет мог быть удалён. Проверь результат перед повторным действием.';
+const rateLimitMessage = 'Слишком много запросов. Подожди перед повтором. Данные формы сохранены.';
 
 function valuesOf(subject) {
   return Object.fromEntries(fields.map((field) => [field, subject[field]]));
@@ -77,7 +80,7 @@ export default function AccountSubjectDetails({
   const recordRef = useRef(detailRef.current);
   const record = recordRef.current;
   const [state, setState] = useState(() => snapshot(record));
-  const [busy, setBusy] = useState('read');
+  const [busy, setBusy] = useState(() => retrySeconds(record.retryAt ?? 0) > 0 ? '' : 'read');
   const dialogRef = useRef(null);
   const headingRef = useRef(null);
   const cancelRef = useRef(null);
@@ -88,6 +91,10 @@ export default function AccountSubjectDetails({
   const retryReadRef = useRef('initial');
   const callbacksRef = useRef({ onClose, onChanged, onAccessError, onAccessRestored });
   callbacksRef.current = { onClose, onChanged, onAccessError, onAccessRestored };
+  const cooldown = useRetryCooldown({
+    initialRetryAt: record.retryAt ?? 0,
+    onChange: (deadline) => { if (active()) record.retryAt = deadline; },
+  });
 
   function active() {
     return mountedRef.current && detailRef.current === record;
@@ -100,7 +107,7 @@ export default function AccountSubjectDetails({
   }
 
   function begin(kind) {
-    if (!active() || mutationLockRef.current) return null;
+    if (!active() || mutationLockRef.current || cooldown.isBlocked()) return null;
     requestRef.current?.controller.abort();
     const operation = { kind, controller: new AbortController() };
     requestRef.current = operation;
@@ -154,7 +161,7 @@ export default function AccountSubjectDetails({
       } else if (record.mode === 'edit') {
         if (record.draft && record.baseVersion !== null && record.baseVersion !== undefined) {
           const needsReview = Boolean(record.gate) || subject.version !== record.baseVersion;
-          update({ subject, unavailable: false,
+          update({ subject, unavailable: false, message: '',
             ...(needsReview ? { latest: subject, gate: 'review',
               message: 'Черновик сохранён. Сравни его с актуальными данными перед сохранением.' } : {}),
           });
@@ -164,12 +171,16 @@ export default function AccountSubjectDetails({
         }
         focusFieldRef.current = 'title';
       } else {
-        update({ subject, unavailable: false, gate: '', latest: null });
+        update({ subject, unavailable: false, gate: '', latest: null, message: '' });
       }
     } catch (error) {
       if (!current(operation)) return;
       if (accessError(error)) handleAccess(error);
       else if (error.status === 404 && error.code === 'SUBJECT_NOT_FOUND') unavailable();
+      else if (isRateLimited(error)) {
+        cooldown.remember(error);
+        update({ readFailed: true, message: rateLimitMessage });
+      }
       else update({ readFailed: true, message: 'Не удалось загрузить предмет. Проверь соединение и повтори загрузку.' });
     } finally {
       finish(operation);
@@ -185,7 +196,10 @@ export default function AccountSubjectDetails({
     document.body.style.overflow = 'hidden';
     if (record.mode === 'delete') cancelRef.current?.focus();
     else headingRef.current?.focus();
-    load('initial');
+    if (cooldown.isBlocked()) {
+      // Reopening must not bypass the deadline or trust a stale editable version.
+      update({ readFailed: true, message: rateLimitMessage });
+    } else load('initial');
     return () => {
       mountedRef.current = false;
       requestRef.current?.controller.abort();
@@ -215,7 +229,7 @@ export default function AccountSubjectDetails({
   }
 
   function enter(mode) {
-    if (!active() || mutationLockRef.current || busy || record.readFailed) return;
+    if (!active() || mutationLockRef.current || busy || record.readFailed || cooldown.isBlocked()) return;
     update({ mode, draft: null, baseVersion: null, gate: '', latest: null, errors: {}, message: '' });
     load(mode);
   }
@@ -237,7 +251,7 @@ export default function AccountSubjectDetails({
 
   async function save(event) {
     event.preventDefault();
-    if (!active() || mutationLockRef.current || busy || record.gate || record.readFailed || record.unavailable || !record.draft) return;
+    if (!active() || mutationLockRef.current || busy || record.gate || record.readFailed || record.unavailable || !record.draft || cooldown.isBlocked()) return;
     let values;
     try {
       values = prepareSubjectValues(record.draft);
@@ -256,6 +270,7 @@ export default function AccountSubjectDetails({
     try {
       const subject = await subjectApi.update(record.id, values, { version, signal: operation.controller.signal });
       if (!current(operation)) return;
+      record.retryAt = 0;
       update({ subject, mode: 'view', draft: null, baseVersion: null, gate: '', latest: null,
         message: 'Изменения сохранены.' });
       callbacksRef.current.onChanged('Изменения сохранены.');
@@ -265,6 +280,10 @@ export default function AccountSubjectDetails({
         update({ gate: '' });
         handleAccess(error);
       } else if (error.status === 404 && error.code === 'SUBJECT_NOT_FOUND') unavailable();
+      else if (isRateLimited(error)) {
+        cooldown.remember(error);
+        update({ gate: '', errors: {}, message: rateLimitMessage });
+      }
       else if (error.code === 'SUBJECT_VERSION_CONFLICT') update({ gate: 'conflict', message: conflictMessage });
       else if (uncertainError(error)) update({ gate: 'patch-unknown', message: unknownPatchMessage });
       else {
@@ -281,13 +300,14 @@ export default function AccountSubjectDetails({
   }
 
   async function remove() {
-    if (!active() || mutationLockRef.current || busy || record.gate || record.readFailed || record.unavailable || !record.subject) return;
+    if (!active() || mutationLockRef.current || busy || record.gate || record.readFailed || record.unavailable || !record.subject || cooldown.isBlocked()) return;
     const operation = begin('delete');
     if (!operation) return;
     update({ gate: 'delete-unknown', errors: {}, message: '' });
     try {
       await subjectApi.remove(record.id, { signal: operation.controller.signal });
       if (!current(operation)) return;
+      record.retryAt = 0;
       callbacksRef.current.onChanged('Предмет удалён.');
       callbacksRef.current.onClose();
     } catch (error) {
@@ -296,6 +316,10 @@ export default function AccountSubjectDetails({
         update({ gate: '' });
         handleAccess(error);
       } else if (error.status === 404 && error.code === 'SUBJECT_NOT_FOUND') unavailable();
+      else if (isRateLimited(error)) {
+        cooldown.remember(error);
+        update({ gate: '', message: rateLimitMessage });
+      }
       else if (error.code === 'SUBJECT_NOT_EMPTY') update({ gate: '',
         message: 'Предмет нельзя удалить: с ним связаны материалы, их обработка или очистка. Дождись завершения и проверь материалы.' });
       else if (uncertainError(error)) update({ gate: 'delete-unknown', message: unknownDeleteMessage });
@@ -333,8 +357,9 @@ export default function AccountSubjectDetails({
       <h2 ref={headingRef} tabIndex={-1} id="account-subject-details-title">{title}</h2>
       {busy === 'read' && <p className="subject-detail-notice" role="status">Загружаем предмет…</p>}
       {state.message && <p className="subject-detail-notice" role={state.gate || state.readFailed || Object.keys(state.errors).length ? 'alert' : 'status'}>{state.message}</p>}
+      {cooldown.blocked && <p className="subject-detail-notice" role="status">Повтор будет доступен через {cooldown.seconds} сек.</p>}
       {state.unavailable && <h3 className="subject-detail-unavailable">Предмет недоступен</h3>}
-      {state.readFailed && <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => load(retryReadRef.current)}>Повторить загрузку</button>}
+      {state.readFailed && <button type="button" className="secondary-button" disabled={Boolean(busy) || cooldown.blocked} onClick={() => load(retryReadRef.current)}>Повторить загрузку</button>}
 
       {canShowContent && state.mode === 'view' && (
         <div className="subject-detail-view">
@@ -348,22 +373,22 @@ export default function AccountSubjectDetails({
           <button
             type="button"
             className="primary-button"
-            disabled={Boolean(busy || state.readFailed)}
+            disabled={Boolean(busy || state.readFailed) || cooldown.blocked}
             onClick={() => onOpenMaterials(state.subject.id)}
           >
             Материалы предмета
           </button>
           <div className="subject-detail-actions">
-            <button type="button" className="secondary-button" disabled={Boolean(busy || state.readFailed)} onClick={() => enter('edit')}><Pencil size={16} aria-hidden="true" />Редактировать предмет</button>
-            <button type="button" className="secondary-button subject-detail-delete-link" disabled={Boolean(busy || state.readFailed)} onClick={() => enter('delete')}><Trash2 size={16} aria-hidden="true" />Удалить предмет</button>
+            <button type="button" className="secondary-button" disabled={Boolean(busy || state.readFailed) || cooldown.blocked} onClick={() => enter('edit')}><Pencil size={16} aria-hidden="true" />Редактировать предмет</button>
+            <button type="button" className="secondary-button subject-detail-delete-link" disabled={Boolean(busy || state.readFailed) || cooldown.blocked} onClick={() => enter('delete')}><Trash2 size={16} aria-hidden="true" />Удалить предмет</button>
           </div>
         </div>
       )}
 
       {canShowContent && state.mode === 'edit' && state.draft && (
         <form className="subject-form" onSubmit={save} noValidate aria-busy={busy === 'patch'}>
-          {state.gate === 'conflict' && <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => load('review')}>Загрузить актуальную версию</button>}
-          {state.gate === 'patch-unknown' && <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => load('review')}>Проверить результат</button>}
+          {state.gate === 'conflict' && <button type="button" className="secondary-button" disabled={Boolean(busy) || cooldown.blocked} onClick={() => load('review')}>Загрузить актуальную версию</button>}
+          {state.gate === 'patch-unknown' && <button type="button" className="secondary-button" disabled={Boolean(busy) || cooldown.blocked} onClick={() => load('review')}>Проверить результат</button>}
           {state.gate === 'review' && state.latest && (
             <section className="subject-detail-review" aria-labelledby="account-subject-review-heading">
               <h3 id="account-subject-review-heading">Сравнение изменений</h3>
@@ -414,7 +439,7 @@ export default function AccountSubjectDetails({
           </fieldset>
           <div className="subject-form-actions">
             <button ref={cancelRef} type="button" className="secondary-button" disabled={mutationPending} onClick={close}>Отмена</button>
-            <button type="submit" className="primary-button" disabled={formLocked}>{busy === 'patch' ? 'Сохраняем…' : 'Сохранить изменения'}</button>
+            <button type="submit" className="primary-button" disabled={formLocked || cooldown.blocked}>{busy === 'patch' ? 'Сохраняем…' : 'Сохранить изменения'}</button>
           </div>
         </form>
       )}
@@ -423,10 +448,10 @@ export default function AccountSubjectDetails({
         <div className="subject-detail-delete">
           <p>Предмет <strong>«{state.subject.title}»</strong> будет удалён из твоего аккаунта на сервере. Отменить удаление нельзя.</p>
           <p className="subject-form-note">Предмет со связанными материалами удалить нельзя. Возможность удаления проверяет сервер.</p>
-          {state.gate === 'delete-unknown' && <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => load('check-delete')}>Проверить результат</button>}
+          {state.gate === 'delete-unknown' && <button type="button" className="secondary-button" disabled={Boolean(busy) || cooldown.blocked} onClick={() => load('check-delete')}>Проверить результат</button>}
           <div className="subject-form-actions">
             <button ref={cancelRef} type="button" className="secondary-button" disabled={mutationPending} onClick={close}>Отмена</button>
-            <button type="button" className="danger-button" disabled={Boolean(busy || state.gate || state.readFailed)} onClick={remove}>
+            <button type="button" className="danger-button" disabled={Boolean(busy || state.gate || state.readFailed) || cooldown.blocked} onClick={remove}>
               <Trash2 size={16} aria-hidden="true" />{busy === 'delete' ? 'Удаляем…' : 'Удалить предмет'}
             </button>
           </div>

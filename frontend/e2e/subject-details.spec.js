@@ -24,9 +24,10 @@ const SUBJECT = {
 };
 const unexpectedByPage = new WeakMap();
 
-async function fail(route, status, code, fieldErrors = {}) {
+async function fail(route, status, code, fieldErrors = {}, headers = {}) {
   await route.fulfill({
     status,
+    headers,
     json: { error: { code, message: 'Служебные подробности сервера.', fieldErrors } },
   });
 }
@@ -404,6 +405,108 @@ test('CSRF отказ PATCH восстанавливает сессию и че�
   await expect(edit.getByLabel('Название предмета')).toHaveValue('Черновик после CSRF');
   await expect(edit.getByLabel('Описание', { exact: true })).toHaveValue('Не потерять мои изменения');
   expect(state.csrf).not.toBe(oldCsrf);
+  expect(state.patches).toHaveLength(1);
+});
+
+test('Предмет: 429 чтения переживает закрытие без раннего GET или автоматического повтора', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockDetails(page);
+  state.onGet = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  let view = await openView(page);
+  await expect(view.getByRole('alert')).toContainText('Слишком много запросов');
+  await expect(view.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeDisabled();
+  const csrfCount = state.csrfCount;
+  await page.keyboard.press('Escape');
+  view = await openView(page);
+  await expect(view.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeDisabled();
+  expect(state.gets).toHaveLength(1);
+  await page.clock.runFor(30_500);
+  expect(state.gets).toHaveLength(1);
+  await expect(view.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled();
+  state.onGet = null;
+  await view.getByRole('button', { name: 'Повторить загрузку', exact: true }).click();
+  await expect(view.getByRole('heading', { level: 3, name: SUBJECT.title, exact: true })).toBeVisible();
+  expect(state.gets).toHaveLength(2);
+  expect(state.csrfCount).toBe(csrfCount);
+});
+
+test('Предмет: 429 PATCH сохраняет черновик после закрытия и требует свежей версии перед повтором', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockDetails(page);
+  state.onPatch = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  let edit = await openAction(page, 'Редактировать');
+  await edit.getByLabel('Название предмета').fill('Черновик после 429');
+  await edit.getByRole('button', { name: 'Сохранить изменения', exact: true }).click();
+  await expect(edit).toContainText('Слишком много запросов');
+  await expect(edit.getByRole('button', { name: 'Сохранить изменения', exact: true })).toBeDisabled();
+  await expect(edit).not.toContainText('Служебные подробности сервера.');
+  const csrfCount = state.csrfCount;
+  await page.keyboard.press('Escape');
+  edit = await openAction(page, 'Редактировать');
+  await expect(edit.getByLabel('Название предмета')).toHaveValue('Черновик после 429');
+  await expect(edit.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeDisabled();
+  expect(state.gets).toHaveLength(1);
+  await page.clock.runFor(30_500);
+  expect(state.gets).toHaveLength(1);
+  expect(state.patches).toHaveLength(1);
+  state.current = { ...state.current, title: 'Сервер изменился', version: 2 };
+  state.onPatch = null;
+  await edit.getByRole('button', { name: 'Повторить загрузку', exact: true }).click();
+  await expect(edit.getByRole('heading', { name: 'Сравнение изменений', exact: true })).toBeVisible();
+  await expect(edit.getByRole('button', { name: 'Сохранить изменения', exact: true })).toBeDisabled();
+  await edit.getByRole('button', { name: 'Продолжить с моим черновиком', exact: true }).click();
+  await edit.getByRole('button', { name: 'Сохранить изменения', exact: true }).click();
+  await expect(dialog(page, 'Предмет')).toContainText('Изменения сохранены.');
+  expect(state.patches).toHaveLength(2);
+  expect(state.patches[1].body).toMatchObject({ title: 'Черновик после 429', version: 2 });
+  expect(state.csrfCount).toBe(csrfCount);
+});
+
+test('Предмет: 429 DELETE не повторяется по таймеру, закрытие сохраняет срок ожидания', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockDetails(page);
+  state.onDelete = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  let modal = await openAction(page, 'Удалить');
+  await modal.getByRole('button', { name: 'Удалить предмет', exact: true }).click();
+  await expect(modal).toContainText('Слишком много запросов');
+  await expect(modal.getByRole('button', { name: 'Удалить предмет', exact: true })).toBeDisabled();
+  const csrfCount = state.csrfCount;
+  await page.keyboard.press('Escape');
+  modal = await openAction(page, 'Удалить');
+  await expect(modal.getByRole('button', { name: 'Удалить предмет', exact: true })).toBeDisabled();
+  expect(state.gets).toHaveLength(1);
+  await page.clock.runFor(30_500);
+  expect(state.gets).toHaveLength(1);
+  expect(state.deletes).toHaveLength(1);
+  await modal.getByRole('button', { name: 'Повторить загрузку', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Удалить предмет', exact: true })).toBeEnabled();
+  state.onDelete = null;
+  await modal.getByRole('button', { name: 'Удалить предмет', exact: true }).click();
+  await expect(modal).not.toBeVisible();
+  await expect(account(page).getByText('Пока нет предметов', { exact: true })).toBeVisible();
+  expect(state.deletes).toHaveLength(2);
+  expect(state.csrfCount).toBe(csrfCount);
+});
+
+test('Предмет: закрытый после 429 черновик очищается при выходе и смене аккаунта', async ({ page }) => {
+  const state = await mockDetails(page);
+  state.onPatch = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  const edit = await openAction(page, 'Редактировать');
+  await edit.getByLabel('Название предмета').fill('Частный черновик после 429');
+  await edit.getByRole('button', { name: 'Сохранить изменения', exact: true }).click();
+  await expect(edit).toContainText('Слишком много запросов');
+  await page.keyboard.press('Escape');
+  await account(page).getByRole('button', { name: 'Выйти из аккаунта', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'С возвращением!', exact: true })).toBeVisible();
+  state.user = OTHER_USER;
+  state.listSubjects = [];
+  state.current = null;
+  await page.getByLabel('Email', { exact: true }).fill(OTHER_USER.email);
+  await page.getByLabel('Пароль', { exact: true }).fill('Only-for-detail-tests!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(account(page).getByText(OTHER_USER.email, { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(account(page)).not.toContainText('Частный черновик после 429');
   expect(state.patches).toHaveLength(1);
 });
 

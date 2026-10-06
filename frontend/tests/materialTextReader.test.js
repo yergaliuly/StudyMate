@@ -43,7 +43,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function setup(reads = [], pageReads = []) {
+function setup(reads = [], pageReads = [], options = {}) {
   const calls = [];
   const views = [];
   const watches = [];
@@ -72,6 +72,7 @@ function setup(reads = [], pageReads = []) {
   };
 
   const reader = createMaterialTextReader({
+    ...options,
     materialId: ID,
     subjectId: SUBJECT,
     canAct: (id) => allowed && id === ID,
@@ -120,6 +121,103 @@ test('Создание не отправляет запросов; stop запр
   await pause();
 
   assert.equal(s.calls.length, 0);
+});
+
+test('429 материала, страниц и job сохраняет deadline и допускает только явный повтор после него', async () => {
+  for (const stage of ['material', 'pages', 'watch']) {
+    let now = 1_000;
+    const record = {};
+    const limited = new ApiError('Внутренние подробности.', {
+      status: 429, code: 'RATE_LIMITED', retryAfterSeconds: 30,
+    });
+    const s = setup(
+      stage === 'material' ? [limited, doc('ready')]
+        : [doc(stage === 'watch' ? 'queued' : 'ready'), doc('ready')],
+      stage === 'pages' ? [limited, pages()] : [pages()],
+      { record, now: () => now },
+    );
+    s.reader.refresh();
+    await pause();
+    if (stage === 'watch') s.watches[0].handlers.onError(limited);
+    assert.equal(s.last.retryAt, 31_000);
+    assert.equal(record.textReads[ID].retryAt, 31_000);
+    assert.deepEqual(s.access, []);
+    const count = s.calls.length;
+    s.reader.refresh();
+    await s.reader.readPage(1);
+    assert.equal(s.calls.length, count);
+    now = 31_000;
+    await pause();
+    assert.equal(s.calls.length, count, 'The deadline does not start a request');
+    if (stage === 'watch') {
+      assert.equal(s.watches[0].stopped, true);
+      s.watches[0].handlers.onUpdate({ type: 'material.extract_text', status: 'succeeded', resultId: ID });
+      await pause();
+      assert.equal(s.calls.length, count, 'A late stopped watcher cannot restart reading');
+    }
+    if (stage === 'pages') await s.reader.readPage(1);
+    else s.reader.refresh();
+    await pause();
+    assert.equal(s.last.pages.status, 'ready');
+    s.reader.stop();
+  }
+});
+
+test('Закрытие reader не снимает cooldown того же материала; другой record не блокируется', async () => {
+  let now = 1_000;
+  const record = {};
+  const first = setup([new ApiError('Подожди.', {
+    status: 429, code: 'RATE_LIMITED', retryAfterSeconds: 30,
+  })], [], { record, now: () => now });
+  first.reader.refresh();
+  await pause();
+  first.reader.stop();
+  const reopened = setup([doc()], [], { record, now: () => now });
+  reopened.reader.refresh();
+  await pause();
+  assert.equal(reopened.calls.length, 0);
+  assert.equal(reopened.last.errorCode, 'RATE_LIMITED');
+  const other = setup([doc()], [], { record: {}, now: () => now });
+  other.reader.refresh();
+  await pause();
+  assert.equal(other.last.status, 'ready');
+  now = 31_000;
+  assert.equal(reopened.calls.length, 0);
+  reopened.reader.refresh();
+  await pause();
+  assert.equal(reopened.last.status, 'ready');
+  reopened.reader.stop();
+  other.reader.stop();
+});
+
+test('Непригодный Retry-After не придумывает срок; запоздалый 429 не меняет новый reader', async () => {
+  for (const retryAfterSeconds of [null, -1, 1.5]) {
+    const s = setup([new ApiError('Подожди.', {
+      status: 429, code: 'RATE_LIMITED', retryAfterSeconds,
+    }), doc()]);
+    s.reader.refresh();
+    await pause();
+    assert.equal(s.last.retryAt, 0);
+    assert.equal(s.calls.length, 1);
+    s.reader.refresh();
+    await pause();
+    assert.equal(s.last.status, 'ready');
+    assert.deepEqual(s.access, []);
+    s.reader.stop();
+  }
+  const pending = deferred();
+  const record = {};
+  const s = setup([pending.promise, doc()], [], { record });
+  s.reader.refresh();
+  s.reader.refresh();
+  await pause();
+  pending.reject(new ApiError('Старый ответ.', {
+    status: 429, code: 'RATE_LIMITED', retryAfterSeconds: 60,
+  }));
+  await pause();
+  assert.equal(record.textReads[ID].retryAt, 0);
+  assert.equal(s.last.status, 'ready');
+  s.reader.stop();
 });
 
 test('not_started не запускает задания или страницы', async () => {

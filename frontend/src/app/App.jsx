@@ -5,6 +5,8 @@ import AuthPage from '../pages/AuthPage.jsx';
 import DemoWorkspace from './DemoWorkspace.jsx';
 import AccountWorkspace from './AccountWorkspace.jsx';
 import { ApiError } from '../services/apiClient.js';
+import { isRateLimited } from '../services/retryAfter.js';
+import { useRetryCooldown } from '../hooks/useRetryCooldown.js';
 import {
   sessionFlow,
   LOGIN_NOT_CONFIRMED,
@@ -50,6 +52,7 @@ export default function App() {
   });
 
   const [retryAttempt, setRetryAttempt] = useState(0);
+  const cooldown = useRetryCooldown();
   const workspaceRef = useRef(null);
 
   // Один владелец запросов сессии. Старые ответы не меняют новый экран.
@@ -57,6 +60,7 @@ export default function App() {
   const pendingIntentRef = useRef(null);
   // Черновик живёт только в памяти и возвращается только своему владельцу.
   const subjectDraftRef = useRef(null);
+  const subjectListRef = useRef(null);
   const subjectDetailRef = useRef(null);
   const materialsRef = useRef(null);
   const resultsRef = useRef(null);
@@ -67,6 +71,7 @@ export default function App() {
   function acceptSession(user) {
     if (user && draftOwnerRef.current !== user.id) {
       subjectDraftRef.current = null;
+      subjectListRef.current = null;
       subjectDetailRef.current = null;
       materialsRef.current = null;
       resultsRef.current = null;
@@ -91,13 +96,16 @@ export default function App() {
 
     async function initializeSession() {
       try {
-        const user = await sessionFlow.readSession({ signal: controller.signal });
+        const read = pendingIntentRef.current === 'reauth'
+          ? sessionFlow.recoverSession : sessionFlow.readSession;
+        const user = await read({ signal: controller.signal });
         if (!controller.signal.aborted && operationRef.current === controller) {
           acceptSession(user);
         }
-      } catch {
+      } catch (error) {
         if (!controller.signal.aborted && operationRef.current === controller) {
-          setSession({ status: 'error', user: null });
+          cooldown.remember(error);
+          setSession({ status: 'error', user: null, rateLimited: isRateLimited(error) });
         }
       } finally {
         if (operationRef.current === controller) {
@@ -136,11 +144,30 @@ export default function App() {
     } catch (error) {
       if (controller.signal.aborted || operationRef.current !== controller) return;
       if (error?.code === 'SESSION_CHECK_FAILED') {
-        setSession({ status: 'error', user: null });
+        cooldown.remember(error);
+        setSession({ status: 'error', user: null, rateLimited: isRateLimited(error) });
       } else {
         pendingIntentRef.current = null;
       }
       throw error;
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      if (operationRef.current === controller) operationRef.current = null;
+    }
+  }
+
+  async function handleRecoverCsrf({ signal }) {
+    if (operationRef.current) throw new ApiError('Дождись завершения запроса.');
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) controller.abort();
+    operationRef.current = controller;
+    try {
+      const user = await sessionFlow.recoverSession({ signal: controller.signal });
+      if (controller.signal.aborted || operationRef.current !== controller) return;
+      // Гостевую форму не размонтируем: её введённые данные остаются в памяти.
+      if (user) acceptSession(user);
     } finally {
       signal.removeEventListener('abort', cancel);
       if (operationRef.current === controller) operationRef.current = null;
@@ -153,6 +180,7 @@ export default function App() {
     operationRef.current = controller;
     pendingIntentRef.current = 'logout';
     subjectDraftRef.current = null;
+    subjectListRef.current = null;
     subjectDetailRef.current = null;
     materialsRef.current = null;
     resultsRef.current = null;
@@ -169,9 +197,10 @@ export default function App() {
       if (!controller.signal.aborted && operationRef.current === controller) {
         acceptSession(user);
       }
-    } catch {
+    } catch (error) {
       if (!controller.signal.aborted && operationRef.current === controller) {
-        setSession({ status: 'error', user: null });
+        cooldown.remember(error);
+        setSession({ status: 'error', user: null, rateLimited: isRateLimited(error) });
       }
     } finally {
       if (operationRef.current === controller) operationRef.current = null;
@@ -189,6 +218,7 @@ export default function App() {
   }, [screen]);
 
   function retrySession() {
+    if (cooldown.isBlocked() || operationRef.current) return;
     recoveringAccessRef.current = false;
     operationRef.current?.abort();
     setScreen('login');
@@ -256,14 +286,17 @@ export default function App() {
           {session.status === 'error' && (
             <SessionPanel title="Не удалось подключиться">
               <p className="auth-feedback" role="alert">
-                Не удалось проверить сессию. Проверь подключение
-                и доступность сервера, затем попробуй снова.
+                {session.rateLimited
+                  ? 'Слишком много запросов. Подожди перед повторной проверкой сессии.'
+                  : 'Не удалось проверить сессию. Проверь подключение и доступность сервера, затем попробуй снова.'}
               </p>
+              {cooldown.blocked && <p role="status">Повторная проверка через {cooldown.seconds} с.</p>}
 
               <button
                 type="button"
                 className="primary-button"
                 onClick={retrySession}
+                disabled={cooldown.blocked}
               >
                 Повторить проверку
               </button>
@@ -285,6 +318,8 @@ export default function App() {
               initialMessage={authMessage}
               onRegistered={handleRegistered}
               onLogin={handleLogin}
+              onRecoverCsrf={handleRecoverCsrf}
+              cooldown={cooldown}
               onModeChange={changeAuthMode}
               onOpenDemo={openDemo}
             />
@@ -298,6 +333,7 @@ export default function App() {
               onLogout={handleLogout}
               onOpenDemo={openDemo}
               draftRef={subjectDraftRef}
+              listRef={subjectListRef}
               detailRef={subjectDetailRef}
               materialsRef={materialsRef}
               resultsRef={resultsRef}

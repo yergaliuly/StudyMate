@@ -4,6 +4,8 @@ import { ArrowLeft, BookOpen, ClipboardList, FileText, RefreshCw, Search, Trash2
 import { subjectApi } from '../../services/subjectApi.js';
 import { materialApi } from '../../services/materialApi.js';
 import { storageApi } from '../../services/storageApi.js';
+import { isRateLimited } from '../../services/retryAfter.js';
+import useRetryCooldown from '../../hooks/useRetryCooldown.js';
 import { formatBytes } from '../../utils/formatBytes.js';
 import StorageUsage from './StorageUsage.jsx';
 import MaterialUploadForm from './MaterialUploadForm.jsx';
@@ -32,6 +34,21 @@ export default function AccountMaterials({
 }) {
   const scope = useRef(stateRef.current).current;
   const record = useRef(scope.records[subjectId]).current;
+  record.readRetries ??= {};
+  const subjectCooldown = useRetryCooldown({
+    initialRetryAt: record.readRetries.subject,
+    onChange: (deadline) => { record.readRetries.subject = deadline; },
+  });
+  const listCooldown = useRetryCooldown({
+    initialRetryAt: record.readRetries.list,
+    onChange: (deadline) => { record.readRetries.list = deadline; },
+  });
+  const storageCooldown = useRetryCooldown({
+    initialRetryAt: scope.storageRetryAt,
+    onChange: (deadline) => { scope.storageRetryAt = deadline; },
+  });
+  const cooldowns = useRef({});
+  cooldowns.current = { subject: subjectCooldown, list: listCooldown, storage: storageCooldown };
   const [selectedMaterialId, setSelectedMaterialId] = useState(
     record.selectedMaterialId ?? null,
   );
@@ -79,7 +96,7 @@ export default function AccountMaterials({
 
   const key = JSON.stringify(request);
 
-  const loading = search.trim() !== request.q
+  const loading = (list.status !== 'error' && search.trim() !== request.q)
     || list.key !== key
     || list.status === 'loading';
 
@@ -141,6 +158,12 @@ export default function AccountMaterials({
       && scope.records[subjectId] === record;
 
     if (!active()) return () => {};
+
+    if (cooldowns.current[slot].isBlocked()) {
+      runtime.ready.delete(slot);
+      publish({ status: 'error', code: 'RATE_LIMITED' });
+      return () => {};
+    }
 
     runtime.requests.get(slot)?.abort();
 
@@ -209,7 +232,8 @@ export default function AccountMaterials({
             setReviewStatus('error');
           }
 
-          publish({ status: 'error' });
+          if (isRateLimited(error)) cooldowns.current[slot].remember(error);
+          publish({ status: 'error', code: isRateLimited(error) ? 'RATE_LIMITED' : error?.code });
         }
       } finally {
         if (runtime.requests.get(slot) === controller) {
@@ -295,6 +319,7 @@ export default function AccountMaterials({
         || stateRef.current !== scope
         || scope.selectedSubjectId !== subjectId
         || scope.records[subjectId] !== record
+        || cooldowns.current.list.isBlocked()
       ) {
         return;
       }
@@ -317,14 +342,22 @@ export default function AccountMaterials({
   }, [search, request.q, runtime, stateRef, scope, subjectId, record]);
 
   function refreshList() {
+    if (!canUseMaterials() || cooldowns.current.list.isBlocked()) return;
+    const q = search.trim();
+    const page = q === request.q ? request.page : 1;
+    record.q = q;
+    record.page = page;
     setRequest((value) => ({
       ...value,
+      q,
+      page,
       revision: value.revision + 1,
       clamped: false,
     }));
   }
 
   function changePage(page) {
+    if (!canUseMaterials() || cooldowns.current.list.isBlocked()) return;
     record.page = page;
     setRequest((value) => ({ ...value, page, clamped: false }));
   }
@@ -338,6 +371,7 @@ export default function AccountMaterials({
 
   function refreshMaterials() {
     if (!canUseMaterials()) return;
+    if (Object.values(cooldowns.current).some((cooldown) => cooldown.isBlocked())) return;
 
     for (const controller of runtime.requests.values()) {
       controller.abort();
@@ -538,13 +572,16 @@ export default function AccountMaterials({
       ) : subject.status === 'error' ? (
         <div className="panel account-material-state">
           <p className="form-error" role="alert">
-            Не удалось загрузить предмет.
+            {subject.code === 'RATE_LIMITED'
+              ? 'Слишком много запросов. Подожди перед повтором.' : 'Не удалось загрузить предмет.'}
           </p>
+          {subjectCooldown.blocked && <p role="status">Повтор доступен через {subjectCooldown.seconds} с.</p>}
 
           <button
             type="button"
             className="secondary-button"
             onClick={() => setSubjectRevision((value) => value + 1)}
+            disabled={subjectCooldown.blocked}
           >
             Повторить загрузку предмета
           </button>
@@ -601,6 +638,8 @@ export default function AccountMaterials({
           <StorageUsage
             status={storage.status}
             usage={storage.data ?? null}
+            errorCode={storage.code}
+            retrySeconds={storageCooldown.seconds}
             onRefresh={() => setStorageRevision((value) => value + 1)}
           />
 
@@ -628,6 +667,7 @@ export default function AccountMaterials({
                 maxLength={160}
                 value={search}
                 placeholder="Найти материал по названию"
+                disabled={listCooldown.blocked}
                 onChange={(event) => {
                   record.search = event.target.value;
                   setSearch(event.target.value);
@@ -638,7 +678,7 @@ export default function AccountMaterials({
             <button
               type="button"
               className="secondary-button"
-              disabled={loading}
+              disabled={loading || listCooldown.blocked}
               onClick={refreshList}
             >
               <RefreshCw size={16} aria-hidden="true" />
@@ -654,13 +694,17 @@ export default function AccountMaterials({
             ) : list.status === 'error' ? (
               <div className="panel account-material-state">
                 <p className="form-error" role="alert">
-                  Не удалось получить актуальный список материалов.
+                  {list.code === 'RATE_LIMITED'
+                    ? 'Слишком много запросов. Подожди перед повтором.'
+                    : 'Не удалось получить актуальный список материалов.'}
                 </p>
+                {listCooldown.blocked && <p role="status">Повтор доступен через {listCooldown.seconds} с.</p>}
 
                 <button
                   type="button"
                   className="secondary-button"
                   onClick={refreshList}
+                  disabled={listCooldown.blocked}
                 >
                   Повторить загрузку материалов
                 </button>
@@ -782,7 +826,7 @@ export default function AccountMaterials({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={list.data.meta.page <= 1}
+                  disabled={listCooldown.blocked || list.data.meta.page <= 1}
                   onClick={() => changePage(list.data.meta.page - 1)}
                 >
                   Предыдущая страница
@@ -791,7 +835,7 @@ export default function AccountMaterials({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={list.data.meta.page >= totalPages}
+                  disabled={listCooldown.blocked || list.data.meta.page >= totalPages}
                   onClick={() => changePage(list.data.meta.page + 1)}
                 >
                   Следующая страница

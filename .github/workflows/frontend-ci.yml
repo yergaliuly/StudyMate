@@ -55,6 +55,7 @@ jobs:
           tests/authApi.test.js
           tests/subjectApi.test.js
           tests/sessionFlow.test.js
+          tests/retryAfter.test.js
           tests/subjectDraft.test.js
           tests/jobApi.test.js
           tests/jobWatcher.test.js

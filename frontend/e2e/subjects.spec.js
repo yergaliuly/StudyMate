@@ -322,6 +322,67 @@ test('REQUEST_IN_PROGRESS соблюдает Retry-After и не повторя�
   expect(state.posts[1].key).toBe(state.posts[0].key);
 });
 
+test('Предметы: 429 списка выдерживает Retry-After без автообновления и выхода из аккаунта', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSubjects(page, {
+    subjects: [subject(1, 'После ожидания')],
+    onList: (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' }),
+  });
+  const retry = account(page).getByRole('button', { name: 'Повторить загрузку', exact: true });
+  await expect(account(page).getByRole('alert')).toContainText('Слишком много запросов');
+  await expect(retry).toBeDisabled();
+  await expect(account(page).getByLabel('Поиск предметов', { exact: true })).toBeDisabled();
+  await expect(account(page)).not.toContainText('Внутренние подробности сервера.');
+  const csrfCount = state.csrfCount;
+  await page.clock.runFor(10_000);
+  await expect(retry).toBeDisabled();
+  expect(state.lists).toHaveLength(1);
+  const navigation = page.getByRole('navigation', { name: 'Основная навигация', exact: true });
+  await navigation.getByRole('button', { name: 'Настройки', exact: true }).click();
+  await expect(account(page).getByRole('heading', { name: 'Предметы аккаунта', exact: true })).toHaveCount(0);
+  await navigation.getByRole('button', { name: 'Мои предметы', exact: true }).click();
+  await expect(retry).toBeDisabled();
+  expect(state.lists).toHaveLength(1);
+  await page.clock.runFor(20_500);
+  await expect(retry).toBeEnabled();
+  expect(state.lists).toHaveLength(1);
+  expect(state.csrfCount).toBe(csrfCount);
+  state.onList = null;
+  await account(page).getByLabel('Поиск предметов', { exact: true }).fill('После');
+  await page.clock.runFor(350);
+  await expect(account(page).getByRole('heading', { name: 'После ожидания', exact: true })).toBeVisible();
+  expect(state.lists).toHaveLength(2);
+  expect(state.lists[1].q).toBe('После');
+});
+
+test('Предметы: 429 создания сохраняет черновик и ключ после закрытия, повтор только вручную', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSubjects(page);
+  state.onCreate = (route) => fail(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  const modal = await openCreate(page, 'Черновик после ограничения');
+  await modal.getByLabel('Описание').fill('Сохранить текст');
+  await modal.getByRole('button', { name: 'Создать предмет', exact: true }).click();
+  await expect(modal.getByRole('alert')).toContainText('Слишком много запросов');
+  await expect(modal.getByRole('button', { name: 'Создать предмет', exact: true })).toBeDisabled();
+  const csrfCount = state.csrfCount;
+  await modal.getByRole('button', { name: 'Закрыть окно', exact: true }).click();
+  await account(page).getByRole('button', { name: 'Добавить предмет', exact: true }).click();
+  await expect(modal.getByLabel('Название предмета')).toHaveValue('Черновик после ограничения');
+  await expect(modal.getByLabel('Описание')).toHaveValue('Сохранить текст');
+  await expect(modal.getByRole('alert')).toContainText('Слишком много запросов');
+  await expect(modal.getByRole('button', { name: 'Создать предмет', exact: true })).toBeDisabled();
+  await page.clock.runFor(30_500);
+  await expect(modal.getByRole('button', { name: 'Создать предмет', exact: true })).toBeEnabled();
+  expect(state.posts).toHaveLength(1);
+  expect(state.csrfCount).toBe(csrfCount);
+  state.onCreate = null;
+  await modal.getByRole('button', { name: 'Создать предмет', exact: true }).click();
+  await expect(modal).not.toBeVisible();
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[1].key).toBe(state.posts[0].key);
+  expect(state.posts[1].raw).toBe(state.posts[0].raw);
+});
+
 test('Ошибка CSRF обновляет сессию того же пользователя и сохраняет черновик без повторного POST', async ({ page }) => {
   const state = await mockSubjects(page);
   state.onCreate = (route) => fail(route, 403, 'CSRF_INVALID');

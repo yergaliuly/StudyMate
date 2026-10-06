@@ -178,10 +178,80 @@ for (const [code, status] of [
         getCurrentUser: async () => user,
       });
       assert.equal(await flow.signOut(), user);
-      assert.deepEqual(names(), ['logout', 'refreshCsrf', 'getCurrentUser']);
+      assert.deepEqual(names(), code === 'CSRF_INVALID'
+        ? ['logout', 'getCurrentUser', 'refreshCsrf']
+        : ['logout', 'refreshCsrf', 'getCurrentUser']);
     });
   }
 }
+
+for (const user of [USER, null]) {
+  test(`Восстановление CSRF: сначала /me (${user ? 'аккаунт' : 'гость'}), затем токен; без POST`, async () => {
+    const csrf = deferred();
+    const entered = deferred();
+    const { flow, names } = setup({
+      getCurrentUser: async () => user,
+      refreshCsrf: () => { entered.resolve(); return csrf.promise; },
+    });
+    let settled = false;
+    const pending = flow.recoverSession().then((result) => { settled = true; return result; });
+    await entered.promise;
+    assert.equal(settled, false);
+    assert.deepEqual(names(), ['getCurrentUser', 'refreshCsrf']);
+    csrf.resolve();
+    assert.equal(await pending, user);
+  });
+}
+
+test('Ошибка /me при восстановлении не создаёт гостя и не запускает CSRF или POST', async () => {
+  const limited = new ApiError('Лимит', { code: 'RATE_LIMITED', status: 429, retryAfterSeconds: 15 });
+  const { flow, names } = setup({ getCurrentUser: async () => { throw limited; } });
+  await assert.rejects(flow.recoverSession(), (error) => error === limited);
+  assert.deepEqual(names(), ['getCurrentUser']);
+});
+
+for (const pausedStep of ['getCurrentUser', 'refreshCsrf']) {
+  test(`Отмена восстановления во время ${pausedStep} не принимает поздний ответ`, async () => {
+    const entered = deferred();
+    const response = deferred();
+    const controller = new AbortController();
+    const { flow, names } = setup({
+      [pausedStep]: () => { entered.resolve(); return response.promise; },
+    });
+    const pending = flow.recoverSession({ signal: controller.signal });
+    await entered.promise;
+    controller.abort();
+    response.resolve(USER);
+    await assert.rejects(pending, errorIs('REQUEST_CANCELLED'));
+    assert.deepEqual(names(), pausedStep === 'getCurrentUser' ? ['getCurrentUser'] : ['getCurrentUser', 'refreshCsrf']);
+  });
+}
+
+test('429 при выходе сохраняет Retry-After и не отправляет немедленную проверку сессии', async () => {
+  const { flow, names } = setup({
+    logout: async () => { throw new ApiError('Лимит', { code: 'RATE_LIMITED', status: 429, retryAfterSeconds: 17 }); },
+  });
+  await assert.rejects(flow.signOut(), (error) => {
+    assert.equal(error.code, 'SESSION_CHECK_FAILED');
+    assert.equal(error.status, 429);
+    assert.equal(error.retryAfterSeconds, 17);
+    return true;
+  });
+  assert.deepEqual(names(), ['logout']);
+});
+
+test('429 после успешного входа остаётся неопределённым состоянием с Retry-After', async () => {
+  const { flow, names } = setup({
+    getCurrentUser: async () => { throw new ApiError('Лимит', { code: 'RATE_LIMITED', status: 429, retryAfterSeconds: 9 }); },
+  });
+  await assert.rejects(flow.signIn(FORM), (error) => {
+    assert.equal(error.code, 'SESSION_CHECK_FAILED');
+    assert.equal(error.status, 429);
+    assert.equal(error.retryAfterSeconds, 9);
+    return true;
+  });
+  assert.deepEqual(names(), ['login', 'refreshCsrf', 'getCurrentUser']);
+});
 
 test('Даже успешный POST выхода не скрывает аккаунт, если /me подтверждает активную сессию', async () => {
   const { flow, names } = setup();

@@ -5,6 +5,7 @@ const TEST_USER = {
   email: 'registration@example.com',
   displayName: 'Тестовый студент',
 };
+const PASSWORD = 'Only-for-registration-tests!';
 
 async function respondWithError(route, status, code, fieldErrors = {}) {
   await route.fulfill({
@@ -26,7 +27,7 @@ async function fillRegistration(page) {
   }).click();
   await page.getByLabel('Имя', { exact: true }).fill(TEST_USER.displayName);
   await page.getByLabel('Email', { exact: true }).fill(TEST_USER.email);
-  await page.getByLabel('Пароль', { exact: true }).fill('Only-for-registration-tests!');
+  await page.getByLabel('Пароль', { exact: true }).fill(PASSWORD);
 }
 
 async function submitRegistration(page) {
@@ -44,6 +45,39 @@ async function expectRegistrationForm(page) {
   })).toBeVisible();
   await expect(page.getByText('Аккаунт подключён к серверу', { exact: true }))
     .not.toBeVisible();
+}
+
+async function expectRegistrationDraft(page) {
+  await expectRegistrationForm(page);
+  for (const [label, value] of [['Имя', TEST_USER.displayName], ['Email', TEST_USER.email], ['Пароль', PASSWORD]]) {
+    await expect(page.getByLabel(label, { exact: true })).toHaveValue(value);
+  }
+}
+
+async function mockRegistrationRecovery(page) {
+  // Bootstrap uses beforeEach routes; record only requests after the form is ready.
+  await expect(page.getByRole('heading', { name: 'С возвращением!', exact: true })).toBeVisible();
+  const state = { events: [], posts: [], csrf: 'registration-test-csrf', csrfCount: 0, onRegister: null };
+  await page.route('**/api/v1/auth/*', async (route) => {
+    const request = route.request();
+    const action = new URL(request.url()).pathname.split('/').at(-1);
+    state.events.push(`${request.method()} ${action}`);
+    if (request.method() === 'POST') {
+      state.posts.push({ action, body: request.postData(), csrf: request.headers()['x-csrf-token'] });
+    }
+    if (action === 'csrf') {
+      state.csrf = `registration-recovered-${++state.csrfCount}`;
+      await route.fulfill({ status: 200, json: { data: { headerName: 'X-CSRF-TOKEN', token: state.csrf } } });
+    } else if (action === 'me') {
+      await respondWithError(route, 401, 'AUTHENTICATION_REQUIRED');
+    } else if (action === 'register') {
+      if (state.onRegister) await state.onRegister(route);
+      else await route.fulfill({ status: 201, json: { data: TEST_USER } });
+    } else {
+      await respondWithError(route, 404, 'TEST_UNEXPECTED_REQUEST');
+    }
+  });
+  return state;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -113,11 +147,6 @@ for (const scenario of [
     code: 'SERVICE_UNAVAILABLE',
     expected: 'Сервис временно недоступен. Попробуй позже.',
   },
-  {
-    status: 403,
-    code: 'CSRF_INVALID',
-    expected: 'Не удалось проверить безопасность формы. Обнови страницу и попробуй снова.',
-  },
 ]) {
   test(`Регистрация показывает понятную ошибку ${scenario.code}`, async ({ page }) => {
     let requests = 0;
@@ -138,6 +167,61 @@ for (const scenario of [
     expect(requests).toBe(1);
   });
 }
+
+test('429 регистрации сохраняет все поля, соблюдает Retry-After и не отправляет POST автоматически', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockRegistrationRecovery(page);
+  state.onRegister = (route) => route.fulfill({
+    status: 429,
+    headers: { 'Retry-After': '30' },
+    json: { error: { code: 'RATE_LIMITED', message: 'Служебное сообщение не для интерфейса.', fieldErrors: {} } },
+  });
+  await fillRegistration(page);
+  await submitRegistration(page);
+  const submit = page.getByRole('button', { name: 'Создать аккаунт', exact: true });
+  await expect(submit).toBeDisabled();
+  await expectRegistrationDraft(page);
+  await page.locator('form').evaluate((form) => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await page.clock.runFor(1000);
+  await expect(submit).toBeDisabled();
+  expect(state.events).toEqual(['POST register']);
+
+  state.onRegister = null;
+  await page.clock.runFor(30_000);
+  await expect(submit).toBeEnabled();
+  await expectRegistrationDraft(page);
+  expect(state.events).toEqual(['POST register']);
+  await submitRegistration(page);
+  await expect(page.getByRole('status')).toHaveText('Аккаунт создан. Теперь войдите.');
+  expect(state.events).toEqual(['POST register', 'POST register']);
+  expect(state.posts[1].body).toBe(state.posts[0].body);
+});
+
+test('CSRF отказ регистрации проверяет me затем csrf, сохраняет ввод и повторяется вручную с новым токеном', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockRegistrationRecovery(page);
+  const previousCsrf = state.csrf;
+  state.onRegister = (route) => respondWithError(route, 403, 'CSRF_INVALID');
+  await fillRegistration(page);
+  await submitRegistration(page);
+  await expect.poll(() => state.csrfCount).toBe(1);
+  await expect(page.getByRole('button', { name: 'Создать аккаунт', exact: true })).toBeEnabled();
+  await expectRegistrationDraft(page);
+  await page.clock.runFor(3000);
+  expect(state.events).toEqual(['POST register', 'GET me', 'GET csrf']);
+  expect(state.posts).toHaveLength(1);
+
+  state.onRegister = null;
+  await submitRegistration(page);
+  await expect(page.getByRole('status')).toHaveText('Аккаунт создан. Теперь войдите.');
+  expect(state.events).toEqual(['POST register', 'GET me', 'GET csrf', 'POST register']);
+  expect(state.posts.map(({ action }) => action)).toEqual(['register', 'register']);
+  expect(state.posts[1].body).toBe(state.posts[0].body);
+  expect(state.posts[1].csrf).toBe(state.csrf);
+  expect(state.posts[1].csrf).not.toBe(previousCsrf);
+});
 
 test('Сетевая ошибка не вызывает автоматический повтор регистрации', async ({ page }) => {
   let requests = 0;
