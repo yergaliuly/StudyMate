@@ -5,7 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static com.studymate.identity.SessionCsrf.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -35,6 +35,7 @@ class RegistrationControllerTest {
   @Autowired MockMvc mvc;
   @MockitoBean RegistrationService registrations;
   @MockitoBean com.studymate.materials.ObjectStorage storage;
+  @MockitoBean com.studymate.pilot.PilotLimits limits;
 
   @Test
   void normalizesInputAndReturnsOnlyPublicUserFields() throws Exception {
