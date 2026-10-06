@@ -205,6 +205,12 @@ backend по [его README](../backend/README.md). Демо доступно о
 Настройка Vite proxy относится к разработке и не заменяет маршрутизацию API
 на production-сервере.
 
+Публикация: [пошаговая настройка Northflank](docs/northflank-deployment.md).
+Production-образ собирает Vite с `/api/v1` и запускает nginx на порту `8080`.
+Runtime-переменные `BACKEND_HOST` и `BACKEND_PORT` выбирают HTTPS-backend;
+браузер обращается к API на том же домене frontend. `/healthz` проверяет только nginx.
+Настройки Vite для локальной разработки остаются прежними; секреты backend в образ не передаются.
+
 ## Автоматические проверки
 
 Node-тесты проверяют API-адаптеры, сессию, черновики и контроллеры действий.
