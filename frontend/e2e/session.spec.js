@@ -9,9 +9,10 @@ const SESSION_USER = {
 const PASSWORD = '  Only-for-session-tests!  ';
 const CONNECTED = 'Аккаунт подключён к серверу';
 
-async function errorResponse(route, status, code, fieldErrors = {}) {
+async function errorResponse(route, status, code, fieldErrors = {}, headers = {}) {
   await route.fulfill({
     status,
+    headers,
     json: {
       error: {
         code,
@@ -32,6 +33,7 @@ async function mockSession(page, { authenticated = false } = {}) {
     onLogin: null,
     onLogout: null,
     onMe: null,
+    onCsrf: null,
   };
 
   await page.route('**/api/v1/subjects?*', async (route) => {
@@ -63,6 +65,10 @@ async function mockSession(page, { authenticated = false } = {}) {
     }
 
     if (action === 'csrf') {
+      if (state.onCsrf) {
+        await state.onCsrf(route);
+        return;
+      }
       state.csrf = `session-test-csrf-${++state.csrfCount}`;
       await route.fulfill({
         status: 200,
@@ -139,6 +145,17 @@ async function fillLogin(page) {
 
 async function submitLogin(page) {
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
+}
+
+async function expectLoginDraft(page) {
+  await expect(page.getByLabel('Email', { exact: true })).toHaveValue(SESSION_USER.email);
+  await expect(page.getByLabel('Пароль', { exact: true })).toHaveValue(PASSWORD);
+}
+
+async function dispatchSubmit(page) {
+  await page.locator('form').evaluate((form) => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
 }
 
 async function logout(page) {
@@ -225,6 +242,169 @@ test('Неверные данные входа дают одно общее со
   expect(state.events).toEqual(['POST login']);
   expect(state.mutations).toHaveLength(1);
 });
+
+test('429 входа сохраняет ввод, блокирует повтор до Retry-After и не повторяет POST по таймеру', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSession(page);
+  state.onLogin = (route) => errorResponse(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  state.events.length = 0;
+  await fillLogin(page);
+  await submitLogin(page);
+
+  const submit = page.getByRole('button', { name: 'Войти', exact: true });
+  await expect(submit).toBeDisabled();
+  await expectLoginDraft(page);
+  await dispatchSubmit(page);
+  await page.clock.runFor(1000);
+  await expect(submit).toBeDisabled();
+  expect(state.events).toEqual(['POST login']);
+
+  state.onLogin = null;
+  await page.clock.runFor(30_000);
+  await expect(submit).toBeEnabled();
+  await expectLoginDraft(page);
+  expect(state.events).toEqual(['POST login']);
+  await submitLogin(page);
+  await expectAccount(page);
+  expect(state.mutations.map(({ action }) => action)).toEqual(['login', 'login']);
+  expect(state.mutations[1].body).toBe(state.mutations[0].body);
+});
+
+test('429 начального me показывает cooldown проверки, не гостя, и повторяет только GET вручную', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSession(page, { authenticated: true });
+  state.onMe = (route) => errorResponse(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+  state.events.length = 0;
+  await page.reload();
+  await expectSessionError(page);
+  const retry = page.getByRole('button', { name: 'Повторить проверку', exact: true });
+  await expect(retry).toBeDisabled();
+  await retry.evaluate((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await page.clock.runFor(1000);
+  await expect(retry).toBeDisabled();
+  expect(state.events).toEqual(['GET csrf', 'GET me']);
+
+  state.onMe = null;
+  await page.clock.runFor(30_000);
+  await expect(retry).toBeEnabled();
+  await expectSessionError(page);
+  expect(state.events).toEqual(['GET csrf', 'GET me']);
+  await retry.click();
+  await expectAccount(page);
+  expect(state.events).toEqual(['GET csrf', 'GET me', 'GET csrf', 'GET me']);
+  expect(state.mutations).toHaveLength(0);
+});
+
+test('CSRF отказ входа проверяет me перед csrf, сохраняет гостевой ввод и ждёт ручного POST', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSession(page);
+  const oldCsrf = state.csrf;
+  state.onLogin = (route) => errorResponse(route, 403, 'CSRF_INVALID');
+  state.events.length = 0;
+  await fillLogin(page);
+  await submitLogin(page);
+  await expect.poll(() => state.csrf).not.toBe(oldCsrf);
+  await expect(page.getByRole('button', { name: 'Войти', exact: true })).toBeEnabled();
+  await expectLoginDraft(page);
+  await page.clock.runFor(3000);
+  expect(state.events).toEqual(['POST login', 'GET me', 'GET csrf']);
+  expect(state.mutations).toHaveLength(1);
+
+  const freshCsrf = state.csrf;
+  state.onLogin = null;
+  await submitLogin(page);
+  await expectAccount(page);
+  expect(state.mutations.map(({ action }) => action)).toEqual(['login', 'login']);
+  expect(state.mutations[1].csrf).toBe(freshCsrf);
+  expect(state.mutations[1].csrf).not.toBe(oldCsrf);
+  expect(state.mutations[1].body).toBe(state.mutations[0].body);
+});
+
+test('CSRF отказ входа при действующей сессии открывает аккаунт только после me и свежего csrf', async ({ page }) => {
+  const state = await mockSession(page);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  state.onLogin = async (route) => {
+    state.authenticated = true;
+    await errorResponse(route, 403, 'CSRF_INVALID');
+  };
+  state.onCsrf = async (route) => {
+    await pending;
+    state.csrf = 'active-recovered-csrf';
+    await route.fulfill({ status: 200, json: { data: { headerName: 'X-CSRF-TOKEN', token: state.csrf } } });
+  };
+  state.events.length = 0;
+  await fillLogin(page);
+  try {
+    await submitLogin(page);
+    await expect.poll(() => state.events).toEqual(['POST login', 'GET me', 'GET csrf']);
+    await expect(page.getByText(CONNECTED, { exact: true })).not.toBeVisible();
+    await expectLoginDraft(page);
+    await dispatchSubmit(page);
+    expect(state.mutations).toHaveLength(1);
+  } finally {
+    release();
+  }
+  await expectAccount(page);
+  expect(state.events).toEqual(['POST login', 'GET me', 'GET csrf']);
+  expect(state.mutations.map(({ action }) => action)).toEqual(['login']);
+});
+
+for (const failure of ['me429', 'csrf-network']) {
+  test(`Ошибка восстановления CSRF (${failure}) сохраняет форму и разрешает только повтор GET`, async ({ page }) => {
+    await page.clock.install();
+    const state = await mockSession(page);
+    state.onLogin = (route) => errorResponse(route, 403, 'CSRF_INVALID');
+    if (failure === 'me429') {
+      state.onMe = (route) => errorResponse(route, 429, 'RATE_LIMITED', {}, { 'Retry-After': '30' });
+    } else {
+      // Даже подтверждённый me не должен открыть аккаунт при неудаче свежего CSRF.
+      state.authenticated = true;
+      state.onCsrf = (route) => route.abort('failed');
+    }
+    state.events.length = 0;
+    await fillLogin(page);
+    await submitLogin(page);
+    const retry = page.getByRole('button', { name: 'Повторить проверку формы', exact: true });
+    await expect(retry).toBeVisible();
+    await expectLoginDraft(page);
+    const submit = page.getByRole('button', { name: 'Войти', exact: true });
+    await expect(submit).toBeDisabled();
+    await expect(page.getByText(CONNECTED, { exact: true })).not.toBeVisible();
+    const failedEvents = failure === 'me429' ? ['POST login', 'GET me'] : ['POST login', 'GET me', 'GET csrf'];
+    expect(state.events).toEqual(failedEvents);
+    await dispatchSubmit(page);
+    if (failure === 'me429') {
+      await expect(retry).toBeDisabled();
+      await retry.evaluate((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await page.clock.runFor(1000);
+      await expect(retry).toBeDisabled();
+    }
+    await page.clock.runFor(30_000);
+    await expect(retry).toBeEnabled();
+    await expect(submit).toBeDisabled();
+    expect(state.events).toEqual(failedEvents);
+    expect(state.mutations).toHaveLength(1);
+
+    state.onMe = null;
+    state.onCsrf = null;
+    await retry.click();
+    await expect.poll(() => state.events).toEqual([...failedEvents, 'GET me', 'GET csrf']);
+    if (failure === 'csrf-network') {
+      await expectAccount(page);
+      expect(state.mutations.map(({ action }) => action)).toEqual(['login']);
+    } else {
+      await expect(submit).toBeEnabled();
+      await expectLoginDraft(page);
+      expect(state.mutations).toHaveLength(1);
+      const freshCsrf = state.csrf;
+      state.onLogin = null;
+      await submitLogin(page);
+      await expectAccount(page);
+      expect(state.mutations[1].csrf).toBe(freshCsrf);
+    }
+  });
+}
 
 test('Два события submit отправляют один запрос входа и блокируют форму до ответа', async ({ page }) => {
   const state = await mockSession(page);
@@ -352,6 +532,30 @@ test('Выход отправляет POST без тела, обновляет C
   await expectLogin(page);
   expect(state.events).toEqual(['GET csrf', 'GET me']);
   expect(state.mutations.filter(({ action }) => action === 'logout')).toHaveLength(2);
+});
+
+test('429 выхода не объявляет сессию завершённой: после ожидания проверяется только GET', async ({ page }) => {
+  await page.clock.install();
+  const state = await mockSession(page, { authenticated: true });
+  state.onLogout = (route) => route.fulfill({
+    status: 429,
+    headers: { 'Retry-After': '30' },
+    json: { error: { code: 'RATE_LIMITED', message: 'Test limit' } },
+  });
+  state.events.length = 0;
+  await logout(page);
+  const retry = page.getByRole('button', { name: 'Повторить проверку', exact: true });
+  await expect(retry).toBeDisabled();
+  await expect(page.getByText('Вы вышли из аккаунта.', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Email', { exact: true })).toHaveCount(0);
+  await page.clock.runFor(31_000);
+  await expect(retry).toBeEnabled();
+  expect(state.events).toEqual(['POST logout']);
+  await retry.click();
+  await expectAccount(page);
+  await expect(page.getByText('Выход не подтверждён. Сессия ещё активна. Попробуй выйти снова.', { exact: true })).toBeVisible();
+  expect(state.events).toEqual(['POST logout', 'GET csrf', 'GET me']);
+  expect(state.mutations).toHaveLength(1);
 });
 
 test('Повторный клик во время выхода не отправляет второй POST', async ({ page }) => {

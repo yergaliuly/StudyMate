@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BookOpen, X } from 'lucide-react';
 import { subjectApi } from '../../services/subjectApi.js';
 import { createSubjectAttempt, prepareSubjectValues } from '../../services/subjectDraft.js';
+import { isRateLimited, retryDeadline } from '../../services/retryAfter.js';
 
 const fields = ['title', 'description', 'icon', 'tone'];
 const colors = [
@@ -13,6 +14,7 @@ const colors = [
 const uncertainMessage = 'Не удалось подтвердить создание предмета. Проверь список или повтори тот же запрос. Предмет мог уже сохраниться.';
 const editWarning = 'Изменённые данные будут отправлены как новое создание. Сначала проверь список: предыдущий предмет мог сохраниться.';
 const messages = {
+  RATE_LIMITED: 'Слишком много запросов. Подожди перед повторным созданием предмета. Черновик сохранён.',
   SUBJECT_TITLE_EXISTS: 'Предмет с таким названием уже есть. Измени название.',
   VALIDATION_FAILED: 'Проверь отмеченные поля.',
   IDEMPOTENCY_KEY_REUSED: 'Этот запрос уже использован с другими данными. Закрой окно и проверь список предметов.',
@@ -50,7 +52,7 @@ export default function AccountSubjectForm({ draftRef, onClose, onCreated, onAcc
     ? messages.IDEMPOTENCY_EXPIRED
     : draftRef.current?.uncertain
       ? draftRef.current?.editingUncertain ? editWarning : uncertainMessage
-      : '');
+      : draftRef.current?.message ?? '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const dialogRef = useRef(null);
   const titleRef = useRef(null);
@@ -112,7 +114,7 @@ export default function AccountSubjectForm({ draftRef, onClose, onCreated, onAcc
     if (submitLockRef.current || locked) return;
     const next = { ...form, [field]: value };
     setForm(next);
-    saveDraft({ values: next });
+    saveDraft({ values: next, message: '' });
     setErrors((current) => ({ ...current, [field]: undefined }));
     if (!uncertain && !expired) setMessage('');
   }
@@ -179,17 +181,19 @@ export default function AccountSubjectForm({ draftRef, onClose, onCreated, onAcc
       const nextErrors = fieldErrors(error);
       const seconds = Number(error.retryAfterSeconds);
       // There is no automatic retry. Retry-After only disables the manual button.
-      const nextRetryAt = Number.isFinite(seconds) && seconds > 0
-        ? Date.now() + Math.ceil(Math.min(seconds, 86400)) * 1000 : 0;
+      const nextRetryAt = isRateLimited(error) ? retryDeadline(error)
+        : Number.isFinite(seconds) && seconds > 0
+          ? Date.now() + Math.ceil(Math.min(seconds, 86400)) * 1000 : 0;
+      const nextMessage = isRateLimited(error) ? messages.RATE_LIMITED : messageFor(error.code)
+        ?? (nextUncertain ? uncertainMessage : 'Не удалось создать предмет. Проверь данные и попробуй ещё раз.');
       setUncertain(nextUncertain);
       setEditingUncertain(false);
       setRetryAt(nextRetryAt);
       setNow(Date.now());
       setErrors(nextErrors);
       errorFocusRef.current = fields.find((field) => nextErrors[field]) ?? '';
-      saveDraft({ uncertain: nextUncertain, editingUncertain: false, retryAt: nextRetryAt });
-      setMessage(messageFor(error.code)
-        ?? (nextUncertain ? uncertainMessage : 'Не удалось создать предмет. Проверь данные и попробуй ещё раз.'));
+      saveDraft({ uncertain: nextUncertain, editingUncertain: false, retryAt: nextRetryAt, message: nextMessage });
+      setMessage(nextMessage);
     } finally {
       if (requestRef.current === controller) {
         requestRef.current = null;

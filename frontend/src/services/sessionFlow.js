@@ -1,5 +1,6 @@
 import { ApiError } from './apiClient.js';
 import { authApi } from './authApi.js';
+import { isRateLimited } from './retryAfter.js';
 
 export const LOGIN_NOT_CONFIRMED = 'Вход не подтверждён. Проверь данные и попробуй снова.';
 export const LOGOUT_NOT_CONFIRMED = 'Выход не подтверждён. Сессия ещё активна. Попробуй выйти снова.';
@@ -21,14 +22,31 @@ export function createSessionFlow(api = authApi) {
     return user;
   }
 
-  async function reconcile(options) {
+  async function recoverSession({ signal } = {}) {
+    checkCancellation(signal);
+    // После CSRF_INVALID сначала выясняем, жива ли сессия. Ошибка /me не равна гостю.
+    const user = await api.getCurrentUser({ signal });
+    checkCancellation(signal);
+    // Гостю тоже нужен токен для следующего явного входа или регистрации.
+    await api.refreshCsrf({ signal });
+    checkCancellation(signal);
+    return user;
+  }
+
+  function sessionCheckError(error) {
+    return new ApiError('Не удалось подтвердить состояние сессии.', {
+      code: 'SESSION_CHECK_FAILED',
+      status: error?.status,
+      retryAfterSeconds: error?.retryAfterSeconds,
+    });
+  }
+
+  async function reconcile(options, read = readSession) {
     try {
-      return await readSession(options);
-    } catch {
+      return await read(options);
+    } catch (error) {
       checkCancellation(options?.signal);
-      throw new ApiError('Не удалось подтвердить состояние сессии.', {
-        code: 'SESSION_CHECK_FAILED',
-      });
+      throw sessionCheckError(error);
     }
   }
 
@@ -52,14 +70,18 @@ export function createSessionFlow(api = authApi) {
     checkCancellation(options.signal);
     try {
       await api.logout(options);
-    } catch {
+    } catch (error) {
       checkCancellation(options.signal);
+      if (isRateLimited(error)) throw sessionCheckError(error);
+      if (['CSRF_INVALID', 'CSRF_NOT_INITIALIZED'].includes(error?.code)) {
+        return reconcile(options, recoverSession);
+      }
       // Даже при ошибке POST состояние определяет только свежий /me.
     }
     return reconcile(options);
   }
 
-  return { readSession, signIn, signOut };
+  return { readSession, recoverSession, signIn, signOut };
 }
 
 export const sessionFlow = createSessionFlow();

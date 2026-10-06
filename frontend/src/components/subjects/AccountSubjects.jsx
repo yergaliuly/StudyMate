@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Plus, RefreshCw, Search } from 'lucide-react';
 
 import { subjectApi } from '../../services/subjectApi.js';
+import { isRateLimited, retrySeconds } from '../../services/retryAfter.js';
+import { useRetryCooldown } from '../../hooks/useRetryCooldown.js';
 import SubjectCard from '../ui/SubjectCard.jsx';
 import AccountSubjectForm from './AccountSubjectForm.jsx';
 import AccountSubjectDetails from './AccountSubjectDetails.jsx';
@@ -15,6 +17,7 @@ function isAccessError(error) {
 }
 
 function listErrorMessage(error) {
+  if (isRateLimited(error)) return 'Слишком много запросов. Подожди перед повторной загрузкой предметов.';
   if (error?.code === 'INVALID_RESPONSE') {
     return 'Не удалось прочитать список предметов. Попробуй обновить его.';
   }
@@ -24,25 +27,34 @@ function listErrorMessage(error) {
 
 export default function AccountSubjects({
   draftRef,
+  listRef,
   detailRef,
   onAccessError,
   onAccessRestored,
   onOpenMaterials,
 }) {
+  const [listRecord] = useState(() => {
+    listRef.current ??= { retryAt: 0 };
+    return listRef.current;
+  });
   const [searchInput, setSearchInput] = useState('');
   const [request, setRequest] = useState({ q: '', page: 1, revision: 0, clamped: false });
   const [list, setList] = useState({ status: 'loading', key: '', subjects: [], meta: null });
   const [isFormOpen, setIsFormOpen] = useState(() => Boolean(draftRef.current?.open));
-  const [selectedId, setSelectedId] = useState(() => detailRef.current?.id ?? null);
+  const [selectedId, setSelectedId] = useState(() => detailRef.current?.open === false ? null : detailRef.current?.id ?? null);
   const [notice, setNotice] = useState('');
   const addButtonRef = useRef(null);
   const returnFocusRef = useRef(false);
   const requestGenerationRef = useRef(0);
   const accessErrorRef = useRef(onAccessError);
   const accessRestoredRef = useRef(onAccessRestored);
+  const { blocked, seconds, isBlocked, remember } = useRetryCooldown({
+    initialRetryAt: listRecord.retryAt,
+    onChange: (deadline) => { if (listRef.current === listRecord) listRecord.retryAt = deadline; },
+  });
   const key = JSON.stringify(request);
   const pendingSearch = searchInput.trim() !== request.q;
-  const loading = pendingSearch || list.key !== key || list.status === 'loading';
+  const loading = (pendingSearch && list.status !== 'error') || list.key !== key || list.status === 'loading';
   const ready = !loading && list.status === 'ready';
   const totalPages = ready ? Math.max(1, Math.ceil(list.meta.total / list.meta.pageSize)) : 1;
 
@@ -61,6 +73,7 @@ export default function AccountSubjects({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (isBlocked()) return;
       const q = searchInput.trim();
       setRequest((current) => current.q === q
         ? current
@@ -68,12 +81,19 @@ export default function AccountSubjects({
     }, 300);
 
     return () => window.clearTimeout(timer);
-  }, [searchInput]);
+  }, [searchInput, isBlocked]);
 
   useEffect(() => {
+    if (listRef.current !== listRecord) return undefined;
+    if (isBlocked()) {
+      setList({ status: 'error', key, subjects: [], meta: null,
+        message: listErrorMessage({ status: 429 }) });
+      return undefined;
+    }
     const controller = new AbortController();
     const generation = ++requestGenerationRef.current;
-    const current = () => !controller.signal.aborted && requestGenerationRef.current === generation;
+    const current = () => !controller.signal.aborted && requestGenerationRef.current === generation
+      && listRef.current === listRecord;
 
     setList({ status: 'loading', key, subjects: [], meta: null });
 
@@ -112,6 +132,7 @@ export default function AccountSubjects({
           return;
         }
 
+        if (isRateLimited(error)) remember(error);
         setList({ status: 'error', key, subjects: [], meta: null, message: listErrorMessage(error) });
       }
     }
@@ -121,7 +142,7 @@ export default function AccountSubjects({
       controller.abort();
       requestGenerationRef.current += 1;
     };
-  }, [key, request]);
+  }, [key, request, isBlocked, remember, listRef, listRecord]);
 
   function updateSearch(value) {
     setSearchInput(value);
@@ -129,14 +150,19 @@ export default function AccountSubjects({
   }
 
   function refreshList() {
+    if (isBlocked()) return;
+    const q = searchInput.trim();
     setRequest((current) => ({
       ...current,
+      q,
+      page: current.q === q ? current.page : 1,
       revision: current.revision + 1,
       clamped: false,
     }));
   }
 
   function changePage(page) {
+    if (isBlocked()) return;
     setNotice('');
     setRequest((current) => ({ ...current, page, clamped: false }));
   }
@@ -161,16 +187,24 @@ export default function AccountSubjects({
   }
 
   function openDetails(subject, mode = 'view') {
-    detailRef.current = { id: subject.id, mode };
+    const retained = detailRef.current;
+    detailRef.current = retained?.id === subject.id && retained.open === false
+      ? { ...retained, open: true }
+      : { id: subject.id, mode, open: true };
     setSelectedId(subject.id);
     setNotice('');
   }
 
   function closeDetails() {
     returnFocusRef.current = true;
-    detailRef.current = null;
+    const record = detailRef.current;
+    const waiting = retrySeconds(record?.retryAt ?? 0) > 0;
+    // Keep a rate-limited draft in the account-owned ref; logout clears that ref.
+    if (record?.retryAt && !record.unavailable
+      && (waiting || record.draft || record.readFailed || record.mode === 'delete')) record.open = false;
+    else detailRef.current = null;
     setSelectedId(null);
-    refreshList();
+    if (!waiting) refreshList();
   }
 
   function handleSubjectChanged(message) {
@@ -199,6 +233,7 @@ export default function AccountSubjects({
           <input
             type="search"
             value={searchInput}
+            disabled={blocked}
             onChange={(event) => updateSearch(event.target.value)}
             maxLength={160}
             placeholder="Найти по названию или описанию"
@@ -209,7 +244,7 @@ export default function AccountSubjects({
           type="button"
           className="secondary-button"
           onClick={refreshList}
-          disabled={loading}
+          disabled={loading || blocked}
         >
           <RefreshCw size={16} aria-hidden="true" />
           Обновить список
@@ -217,6 +252,7 @@ export default function AccountSubjects({
       </div>
 
       {notice && <p className="account-subject-notice" role="status">{notice}</p>}
+      {blocked && <p className="account-subject-notice" role="status">Повтор будет доступен через {seconds} сек.</p>}
 
       <div className="account-subject-results" aria-busy={loading}>
         {loading ? (
@@ -224,7 +260,7 @@ export default function AccountSubjects({
         ) : list.status === 'error' ? (
           <div className="panel account-subject-state">
             <p className="form-error" role="alert">{list.message}</p>
-            <button type="button" className="secondary-button" onClick={refreshList}>
+            <button type="button" className="secondary-button" disabled={blocked} onClick={refreshList}>
               Повторить загрузку
             </button>
           </div>
@@ -259,7 +295,7 @@ export default function AccountSubjects({
             <button
               type="button"
               className="secondary-button"
-              disabled={list.meta.page <= 1}
+              disabled={blocked || list.meta.page <= 1}
               onClick={() => changePage(list.meta.page - 1)}
             >
               Предыдущая страница
@@ -267,7 +303,7 @@ export default function AccountSubjects({
             <button
               type="button"
               className="secondary-button"
-              disabled={list.meta.page >= totalPages}
+              disabled={blocked || list.meta.page >= totalPages}
               onClick={() => changePage(list.meta.page + 1)}
             >
               Следующая страница

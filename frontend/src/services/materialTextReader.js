@@ -2,6 +2,7 @@ import { ApiError } from './apiClient.js';
 import { materialApi } from './materialApi.js';
 import { isTerminalJobStatus } from './jobApi.js';
 import { watchJob } from './jobWatcher.js';
+import { isRateLimited, retryDeadline, retrySeconds } from './retryAfter.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 5;
@@ -12,6 +13,8 @@ function emptyView() {
     material: null,
     jobStatus: null,
     watchError: null,
+    errorCode: null,
+    retryAt: 0,
     pages: { status: 'idle' },
   };
 }
@@ -19,12 +22,14 @@ function emptyView() {
 export function createMaterialTextReader({
   materialId,
   subjectId,
+  record = {},
   canAct,
   onChange,
   onAccessError,
   onMaterialRead = () => {},
   api = materialApi,
   watch = watchJob,
+  now = Date.now,
 }) {
   if (
     typeof materialId !== 'string' || !UUID.test(materialId)
@@ -41,11 +46,15 @@ export function createMaterialTextReader({
     || typeof api?.getById !== 'function'
     || typeof api?.pages !== 'function'
     || typeof watch !== 'function'
+    || typeof now !== 'function'
+    || !record || typeof record !== 'object'
   ) {
     throw new TypeError('Некорректные параметры просмотра материала.');
   }
 
   let stopped = false;
+  record.textReads ??= {};
+  const cooldown = record.textReads[materialId.toLowerCase()] ??= { retryAt: 0 };
   let generation = 0;
   let materialController = null;
   let pageController = null;
@@ -61,8 +70,15 @@ export function createMaterialTextReader({
 
   function publish(patch) {
     if (!active()) return;
-    view = { ...view, ...patch };
+    view = { ...view, ...patch, retryAt: cooldown.retryAt };
     onChange(view);
+  }
+
+  function coolingDown() {
+    if (!retrySeconds(cooldown.retryAt, now())) return false;
+    publish(view.status === 'loading'
+      ? { status: 'error', errorCode: 'RATE_LIMITED' } : {});
+    return true;
   }
 
   function invalidate() {
@@ -102,23 +118,28 @@ export function createMaterialTextReader({
       return;
     }
 
-    const code = error?.code || 'REQUEST_FAILED';
+    const code = isRateLimited(error) ? 'RATE_LIMITED' : error?.code || 'REQUEST_FAILED';
+    if (isRateLimited(error)) {
+      cooldown.retryAt = Math.max(cooldown.retryAt, retryDeadline(error, now()));
+    }
 
     if (stage === 'watch') {
       stopWatching?.();
       stopWatching = null;
+      generation += 1;
       publish({ watchError: code });
     } else if (stage === 'pages') {
       publish({ pages: { status: 'error', page, code } });
     } else {
       invalidate();
-      publish({ ...emptyView(), status: 'error' });
+      publish({ ...emptyView(), status: 'error', errorCode: code });
     }
   }
 
   async function readPage(page = 1) {
     if (
       !active()
+      || coolingDown()
       || material?.status !== 'stored'
       || material.processingStatus !== 'ready'
     ) {
@@ -148,7 +169,7 @@ export function createMaterialTextReader({
   }
 
   async function loadMaterial() {
-    if (!active()) return;
+    if (!active() || coolingDown()) return;
 
     invalidate();
     const epoch = generation;
@@ -237,7 +258,7 @@ export function createMaterialTextReader({
   }
 
   function refresh() {
-    if (!active()) return;
+    if (!active() || coolingDown()) return;
     terminalJobs.clear();
     void loadMaterial();
   }

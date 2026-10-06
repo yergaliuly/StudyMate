@@ -36,6 +36,7 @@ export default function AccountWorkspace({
   onOpenDemo,
   message = '',
   draftRef,
+  listRef,
   detailRef,
   materialsRef,
   resultsRef,
@@ -198,6 +199,7 @@ function openMaterials(id) {
           ) : showSubjects ? (
             <AccountSubjects
               draftRef={draftRef}
+              listRef={listRef}
               detailRef={detailRef}
               onOpenMaterials={openMaterials}
               onAccessError={onAccessError}
